@@ -192,7 +192,7 @@ def main():
     ruta_salida = os.path.join(carpeta_salida, f"{nombre_base}_equivalencias.csv")
 
     df_resultado.to_csv(ruta_salida, index=False, sep=delimitador, encoding='utf-8-sig')
-    print(f"\nProceso completado. Archivo guardado correctamente en:\n{ruta_salida}")
+    print(f"\nProceso completado. Archivo guardado correctamente en la ruta:\n{ruta_salida}")
 
 
 if __name__ == '__main__':
