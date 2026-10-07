@@ -189,7 +189,7 @@ def main():
 
     # Guardar manteniendo el separador correcto (;)
     nombre_base = os.path.splitext(os.path.basename(ruta_entrada))[0]
-    ruta_salida = os.path.join(carpeta_salida, f"{nombre_base}_procesado.csv")
+    ruta_salida = os.path.join(carpeta_salida, f"{nombre_base}_equivalencias.csv")
 
     df_resultado.to_csv(ruta_salida, index=False, sep=delimitador, encoding='utf-8-sig')
     print(f"\nProceso completado. Archivo guardado correctamente en:\n{ruta_salida}")
