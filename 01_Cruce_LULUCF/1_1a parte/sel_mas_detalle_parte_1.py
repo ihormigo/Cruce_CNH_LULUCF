@@ -6,6 +6,7 @@ import sys
 import time
 from datetime import datetime
 
+
 class mejora_nivel_detalle:
     def __init__(self, ruta_input, folder_output, zona, path_gdb_vectorial):
         self.ruta_input = ruta_input
@@ -125,8 +126,9 @@ class mejora_nivel_detalle:
             100: 'T', 111: 'T', 112: 'T', 121: 'T3', 122: 'T3', 131: 'T', 132: 'T', 141: 'T', 142: 'T',
             200: 'R', 210: 'R7', 220: 'S', 230: 'R', 240: 'U54.ES',
             400: 'U',
-            500: 'Q', 511: 'Q', 512: 'Q', 520: 'J5' , 521: 'J5.35.ES', 522: 'J5.41', 523: 'J5.413.ES', 524: 'J5.31', 526: 'J5.3',
-            527: 'J5.12', 531: 'P2', 532: 'P1', 533: 'X' , 536: 'MA2', 537: 'M',
+            500: 'Q', 511: 'Q', 512: 'Q', 520: 'J5', 521: 'J5.35.ES', 522: 'J5.41', 523: 'J5.413.ES', 524: 'J5.31',
+            526: 'J5.3',
+            527: 'J5.12', 531: 'P2', 532: 'P1', 533: 'X', 536: 'MA2', 537: 'M',
             65535: '65535',
         }
 
@@ -406,40 +408,58 @@ class mejora_nivel_detalle:
 
 ########################################################################################################################
 def ejecutar_cruce_lulucf():
-    ruta_datos = os.path.normpath(input("Introduce la ruta del fichero (.csv) con los datos a volcar"
-                                        "\n Los campos lpehx y px deben tener la siguiente estructura:"
-                                        "\n LPEH_X y PER_X \n>"))
-    ruta_gdb = os.path.normpath(input("\nIntroduce la ruta de la GDB, debe de ser la carpeta.gdb que contiene los datos no debe estar "
-                                      "\n contenida dentro de otra carpeta con el mismo nombre (como ocurre al descomprimir)\n>"))
+    # Permitimos introducir tanto una ruta a un archivo suelto como a una carpeta entera
+    ruta_entrada = os.path.normpath(input(
+        "Introduce la ruta de la CARPETA que contiene los ficheros (.csv) de ambas zonas "
+        "(o un fichero .csv suelto)\n Los campos lpehx y px deben tener la estructura LPEH_X y PER_X \n>"
+    ))
+    ruta_gdb = os.path.normpath(input(
+        "\nIntroduce la ruta de la GDB, debe de ser la carpeta.gdb que contiene los datos\n>"
+    ))
     carpeta_salida = os.path.normpath(input("\nIntroduce la ruta de la carpeta de salida\n>"))
 
-    # 1. Determinación automática de la zona a partir del archivo de entrada
-    nombre_archivo = os.path.basename(ruta_datos).lower()
-    zona_analisis = "c" if "_c_" in nombre_archivo else "pb" if "_pb_" in nombre_archivo else "desconocida"
+    archivos_a_procesar = []
 
-    print(f"\n--- Iniciando procesamiento para zona '{zona_analisis}' ---")
+    # Comprobamos si el usuario ha pasado un fichero o una carpeta
+    if os.path.isfile(ruta_entrada) and ruta_entrada.lower().endswith('.csv'):
+        archivos_a_procesar.append(ruta_entrada)
+    elif os.path.isdir(ruta_entrada):
+        # Escaneamos la carpeta en busca de ficheros csv que contengan '_pb_' o '_c_'
+        archivos_a_procesar = [
+            os.path.join(ruta_entrada, f) for f in os.listdir(ruta_entrada)
+            if f.lower().endswith('.csv') and ('_pb_' in f.lower() or '_c_' in f.lower())
+        ]
 
-    # 2. Inicialización de la clase con los parámetros proporcionados
-    procesador = mejora_nivel_detalle(
-        ruta_input=ruta_datos,
-        folder_output=carpeta_salida,
-        zona=zona_analisis,
-        path_gdb_vectorial=ruta_gdb
-    )
+    if not archivos_a_procesar:
+        print("❌ Error: No se ha encontrado ningún archivo .csv válido con identificador de zona ('_pb_' o '_c_').")
+        return
 
-    # 3. Flujo de ejecución lineal y secuencial
-    procesador.cargar_vectorial()  # Busca la capa correspondiente en la GDB
-    procesador.sel_vectorial()  # Filtra en disco con ArcPy y extrae a GeoPandas
-    procesador.mapeo()  # Realiza el mapeo de los códigos de cultivo/artificiales
-    procesador.redondeo_mapeo()  # Ajusta porcentajes y distribuye remanentes
-    procesador.pivotar()  # Transforma los registros a formato horizontal (LPEH_X)
+    # Iteramos sobre los archivos encontrados (ejecutará una o dos veces dependiendo de lo que encuentre)
+    for ruta_datos in archivos_a_procesar:
+        nombre_archivo = os.path.basename(ruta_datos).lower()
+        zona_analisis = "c" if "_c_" in nombre_archivo else "pb" if "_pb_" in nombre_archivo else "desconocida"
 
-    procesador.union_tablas() # ADEMAS SE FILTRAN LOS REGISTROS POR "asigna_lpeh1 = 5"
-    procesador.eliminacion_duplicados_lpehx_LPEHX_px_PERX()
-    
-    procesador.clasificacion_para_revision_manual()
-    
-    print(f"\n🚀 ¡Proceso completado con éxito para la zona '{zona_analisis}'!")
+        print(f"\n" + "=" * 70)
+        print(f"--- Iniciando procesamiento para zona '{zona_analisis.upper()}' (Archivo: {nombre_archivo}) ---")
+        print("=" * 70)
+
+        procesador = mejora_nivel_detalle(
+            ruta_input=ruta_datos,
+            folder_output=carpeta_salida,
+            zona=zona_analisis,
+            path_gdb_vectorial=ruta_gdb
+        )
+
+        procesador.cargar_vectorial()
+        procesador.sel_vectorial()
+        procesador.mapeo()
+        procesador.redondeo_mapeo()
+        procesador.pivotar()
+        procesador.union_tablas()
+        procesador.eliminacion_duplicados_lpehx_LPEHX_px_PERX()
+        procesador.clasificacion_para_revision_manual()
+
+        print(f"\n🚀 ¡Proceso completado con éxito para la zona '{zona_analisis}'!")
 
 
 ########################################################################################################################
@@ -450,14 +470,12 @@ if __name__ == "__main__":
 
     ejecutar_cruce_lulucf()
 
-    print("\n" + "="*50)
+    print("\n" + "=" * 50)
     fin = time.time()
-    tiempo_total = fin-ini
+    tiempo_total = fin - ini
     print(f"⏱️ El proceso ha tardado: {tiempo_total:.2f} segundos")
-    print("="*50)
+    print("=" * 50)
 
     # C:\Users\ihormigo\Desktop\resultados_cruce\0 datos originales\cbp_lulucf_pb_art_y_cult.csv
     # C:\Users\ihormigo\Desktop\resultados_cruce\0 datos originales\preCNH24v1_int_AAF_20260731.gdb
     # C:\Users\ihormigo\Desktop\PRUEBAS\Parte1_metod_prueba_anadir_2aa_2bb_filtro
-
-
