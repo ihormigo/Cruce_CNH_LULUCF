@@ -5,6 +5,7 @@ import os
 import sys
 import time
 from datetime import datetime
+import glob
 
 class mejora_nivel_detalle:
     def __init__(self, ruta_input, folder_output, zona, path_gdb_vectorial):
@@ -83,7 +84,7 @@ class mejora_nivel_detalle:
             arcpy.analysis.Select(ruta_entrada, self.cbp_sel_fc, where_clause)
 
             print("Cargando la selección en GeoPandas (para uso tabular)...")
-            self.cbp_sel = gpd.read_file(gdb_temporal, layer="temp_sel_art_y_cult")
+            self.cbp_sel = gpd.read_file(gdb_temporal, layer=nombre_capa_temp)
             self.cbp_sel['a_cnh24'] = self.cbp_sel.geometry.area
             print(f'✅ Tras la selección quedan {len(self.cbp_sel)} registros extraídos de la GDB.')
 
@@ -366,9 +367,9 @@ class mejora_nivel_detalle:
             'registros_LPEH_1_CON_Vs_Js.csv': self.registros_LPEH_1_CON_Vs_Js,
             f'revision_cruce_LPEH_2_X_SI_VJ_{self.zona}.csv': self.LPEH_2_X_SI_VJ,
             f'revision_cruce_LPEH_2_X_NO_VJ_{self.zona}.csv': self.LPEH_2_X_NO_VJ,
-            'revision_cruce_suma_PERs_X_CON_Vs_Js_menor_igual_70.csv': self.suma_PERs_X_CON_Vs_Js_menor_igual_70,
-            'revision_cruce_suma_PERs_X_CON_Vs_Js_70_85.csv': self.suma_PERs_X_CON_Vs_Js_70_85,
-            'revision_mejorar_detalle_cruce_suma_PERs_X_CON_Vs_Js_mayor_igual_85.csv': self.suma_PERs_X_CON_Vs_Js_mayor_igual_85
+            f'revision_cruce_suma_PERs_X_CON_Vs_Js_menor_igual_70_{self.zona}.csv': self.suma_PERs_X_CON_Vs_Js_menor_igual_70,
+            f'revision_cruce_suma_PERs_X_CON_Vs_Js_70_85_{self.zona}.csv': self.suma_PERs_X_CON_Vs_Js_70_85,
+            f'revision_mejorar_detalle_cruce_suma_PERs_X_CON_Vs_Js_mayor_igual_85_{self.zona}.csv': self.suma_PERs_X_CON_Vs_Js_mayor_igual_85
         }
 
         for nombre_csv, df_out in archivos_generar.items():
@@ -406,40 +407,45 @@ class mejora_nivel_detalle:
 
 ########################################################################################################################
 def ejecutar_cruce_lulucf():
-    # Permitimos introducir tanto una ruta a un archivo suelto como a una carpeta entera
-    ruta_entrada = os.path.normpath(input(
-        "Introduce la ruta de la CARPETA que contiene los ficheros (.csv) de ambas zonas "
-        "(o un fichero .csv suelto)\n Los campos lpehx y px deben tener la estructura LPEH_X y PER_X \n>"
-    ))
-    ruta_gdb = os.path.normpath(input(
-        "\nIntroduce la ruta de la GDB, debe de ser la carpeta.gdb que contiene los datos\n>"
-    ))
-    carpeta_salida = os.path.normpath(input("\nIntroduce la ruta de la carpeta de salida\n>"))
+    print("=== PROCESAMIENTO BATCH DE ZONAS (PB y C) ===")
 
-    archivos_a_procesar = []
+    # 1. Prompts de entrada limpios de comillas de arrastre en Windows
+    carpeta_entrada = input("1. Introduce la ruta de la CARPETA con los CSV de entrada (PB y C):\n> ").strip('\"\'')
+    ruta_gdb = input("\n2. Introduce la ruta de la GDB (.gdb):\n> ").strip('\"\'')
+    carpeta_salida = input("\n3. Introduce la ruta de la CARPETA DE SALIDA:\n> ").strip('\"\'')
 
-    # Comprobamos si el usuario ha pasado un fichero o una carpeta
-    if os.path.isfile(ruta_entrada) and ruta_entrada.lower().endswith('.csv'):
-        archivos_a_procesar.append(ruta_entrada)
-    elif os.path.isdir(ruta_entrada):
-        # Escaneamos la carpeta en busca de ficheros csv que contengan '_pb_' o '_c_'
-        archivos_a_procesar = [
-            os.path.join(ruta_entrada, f) for f in os.listdir(ruta_entrada)
-            if f.lower().endswith('.csv') and ('_pb_' in f.lower() or '_c_' in f.lower())
-        ]
+    carpeta_entrada = os.path.normpath(carpeta_entrada)
+    ruta_gdb = os.path.normpath(ruta_gdb)
+    carpeta_salida = os.path.normpath(carpeta_salida)
 
-    if not archivos_a_procesar:
-        print("❌ Error: No se ha encontrado ningún archivo .csv válido con identificador de zona ('_pb_' o '_c_').")
+    if not os.path.isdir(carpeta_entrada):
+        print(f"❌ Error: La carpeta de entrada no existe: {carpeta_entrada}")
         return
 
-    # Iteramos sobre los archivos encontrados (ejecutará una o dos veces dependiendo de lo que encuentre)
-    for ruta_datos in archivos_a_procesar:
-        nombre_archivo = os.path.basename(ruta_datos).lower()
-        zona_analisis = "c" if "_c_" in nombre_archivo else "pb" if "_pb_" in nombre_archivo else "desconocida"
+    # 2. Buscar todos los archivos .csv en la carpeta de entrada
+    archivos_csv = glob.glob(os.path.join(carpeta_entrada, "*.csv"))
 
-        print(f"\n" + "=" * 70)
-        print(f"--- Iniciando procesamiento para zona '{zona_analisis.upper()}' (Archivo: {nombre_archivo}) ---")
-        print("=" * 70)
+    if not archivos_csv:
+        print(f"❌ Error: No se encontraron archivos .csv en: {carpeta_entrada}")
+        return
+
+    # 3. Iterar sobre los archivos detectando dinámicamente la zona (PB o C)
+    for ruta_datos in archivos_csv:
+        nombre_archivo = os.path.basename(ruta_datos)
+        nombre_lower = nombre_archivo.lower()
+
+        # Detección flexible de zona
+        if "_pb_" in nombre_lower or "pb" in nombre_lower:
+            zona_analisis = "pb"
+        elif "_c_" in nombre_lower or "canarias" in nombre_lower or "_c." in nombre_lower:
+            zona_analisis = "c"
+        else:
+            print(f"⚠️ Omitiendo '{nombre_archivo}': No se pudo identificar la zona ('PB' o 'C').")
+            continue
+
+        print("\n" + "=" * 75)
+        print(f"🚀 INICIANDO PROCESAMIENTO: ZONA '{zona_analisis.upper()}' | Archivo: {nombre_archivo}")
+        print("=" * 75)
 
         procesador = mejora_nivel_detalle(
             ruta_input=ruta_datos,
@@ -448,6 +454,7 @@ def ejecutar_cruce_lulucf():
             path_gdb_vectorial=ruta_gdb
         )
 
+        # Flujo de ejecución secuencial
         procesador.cargar_vectorial()
         procesador.sel_vectorial()
         procesador.mapeo()
@@ -456,8 +463,10 @@ def ejecutar_cruce_lulucf():
         procesador.union_tablas()
         procesador.eliminacion_duplicados_lpehx_LPEHX_px_PERX()
         procesador.clasificacion_para_revision_manual()
-    
-        print(f"\n🚀 ¡Proceso completado con éxito para la zona '{zona_analisis}'!")
+
+        print(f"\n✅ Proceso completado con éxito para la zona '{zona_analisis.upper()}'!")
+
+    print("\n🎉 ¡EL FLUJO BATCH HA FINALIZADO PARA TODAS LAS ZONAS ENCONTRADAS!")
 
 
 ########################################################################################################################
@@ -474,8 +483,8 @@ if __name__ == "__main__":
     print(f"⏱️ El proceso ha tardado: {tiempo_total:.2f} segundos")
     print("="*50)
 
-    # C:\Users\ihormigo\Desktop\resultados_cruce\0 datos originales\cbp_lulucf_pb_art_y_cult.csv
-    # C:\Users\ihormigo\Desktop\resultados_cruce\0 datos originales\preCNH24v1_int_AAF_20260731.gdb
-    # C:\Users\ihormigo\Desktop\PRUEBAS\Parte1_metod_prueba_anadir_2aa_2bb_filtro
+    # C:\Users\ihormigo\Desktop\resultados_cruce\2_Resultado_procesado_geoespacial
+    # C:\Users\ihormigo\Desktop\resultados_cruce\1_datos originales\preCNH24v1_int_AAF_20260731.gdb
+    # C:\Users\ihormigo\Desktop
 
 
