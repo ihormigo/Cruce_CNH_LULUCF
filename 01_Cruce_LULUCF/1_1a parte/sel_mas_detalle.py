@@ -40,6 +40,7 @@ class mejora_nivel_detalle:
         self.mapa_lpeh_cultivos = None
         self.mapa_lpeh_artificiales = None
         self.mapa_lpeh_gridcodes = None
+        self.continuar_SIN_asigna1_5_2aabb = None
 
         # Detección del grupo (7s u 8s) a partir del nombre del archivo de entrada
         nombre_input = os.path.basename(self.ruta_input).lower()
@@ -230,22 +231,37 @@ class mejora_nivel_detalle:
         self.tablas_unidas = pd.merge(self.df_pivotado, df_gdb, on='id_cnhv2', how='left')
 
         # 5. Separar los registros según el campo 'asigna_lpeh1'
+        asigna_str = self.tablas_unidas['asigna_lpeh1'].astype(str).str.strip()
+        mask_descartes = asigna_str.str.contains('5', na=False) | asigna_str.isin(['2aa', '2bb'])
+
+        descartes_filtros = self.tablas_unidas[mask_descartes]
+        self.continuar_SIN_asigna1_5_2aabb = self.tablas_unidas[~mask_descartes]
+
         filas_unidas = len(self.tablas_unidas)
+        filas_descartes = len(descartes_filtros)
+        filas_continuar = len(self.continuar_SIN_asigna1_5_2aabb)
 
         print("\n" + "=" * 60)
         print(f"📊 CONTROL DE REGISTROS - ZONA: {self.zona}")
         print("=" * 60)
-        print(f"Total en Tabla Unida (Sin filtros): {filas_unidas} registros")
+        print(f"Total en Tabla Unida: {filas_unidas} registros")
+        print(f" - Descartes (contiene 5, es 2aa o 2bb): {filas_descartes} registros")
+        print(f" - Continuar depuración: {filas_continuar} registros")
         print("=" * 60 + "\n")
 
-        # 6. Exportar el archivo unificado completo a CSV
-        path_unidas = os.path.join(self.folder_output, f'tablas_unidas_{self.zona}_{self.grupo}.csv')
-        self.tablas_unidas.to_csv(path_unidas, sep=';', index=False, encoding='utf-8-sig')
+        # 6. Exportar los dos archivos de salida específicos a CSV (incluyendo grupo 7s/8s en el nombre)
+        path_descartes = os.path.join(self.folder_output, f'revisar_descartes_filtros_asigna1_{self.zona}_{self.grupo}.csv')
+        path_continuar = os.path.join(self.folder_output, f'continuar_dep_filtros_asigna1_{self.zona}_{self.grupo}.csv')
+
+        descartes_filtros.to_csv(path_descartes, sep=';', index=False, encoding='utf-8-sig')
+        self.continuar_SIN_asigna1_5_2aabb.to_csv(path_continuar, sep=';', index=False, encoding='utf-8-sig')
+
 
     def eliminacion_duplicados_lpehx_LPEHX_px_PERX(self):
         print("Filtrando y exportando registros duplicados (coincidencia total)...")
 
-        df = self.tablas_unidas.copy()
+        # AQUÍ USAMOS EL DF FILTRADO (SIN LOS DESCARTES DE LA ETAPA ANTERIOR)
+        df = self.continuar_SIN_asigna1_5_2aabb.copy()
 
         # Identificar dinámicamente todos los índices numéricos de posición (1, 2, 3...)
         posiciones = sorted(list({int(col.replace('LPEH_', '').replace('lpeh', ''))
@@ -482,7 +498,3 @@ if __name__ == "__main__":
     tiempo_total = fin-ini
     print(f"⏱️ El proceso ha tardado: {tiempo_total:.2f} segundos")
     print("="*50)
-
-    # C:\Users\ihormigo\Desktop\Cruce_separacion_Vs_Js\1a_parte_Procesado_espacial\Resultado
-    # C:\Users\ihormigo\Desktop\Cruce_preCNH24_LULUCF\1_datos originales\preCNH24_int_AAF_20260828.gdb
-    # C:\Users\ihormigo\Desktop\Cruce_separacion_Vs_Js\res
