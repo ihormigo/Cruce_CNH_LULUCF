@@ -1,5 +1,6 @@
 import os
 import pandas as pd
+import sys
 
 # -----------------------------------------------------------------------------
 # 1. PASARELA DICCIONARIO (Cargada directamente en código)
@@ -151,6 +152,36 @@ def aplicar_pasarela_df(df, pasarela_dict):
 
     return df
 
+# =============================================================================
+# FUNCIÓN 3: Eliminación de duplicados lpeh-LPEH
+# =============================================================================
+def eliminar_duplicados_binomios(df):
+    """
+    Elimina los registros duplicados basándose exclusivamente en las combinaciones
+    de coberturas y porcentajes de origen (lpeh, per) y destino (LPEH_, PER_).
+    """
+    print('\nIniciando eliminación de duplicados lpehx-LPEH_X...')
+
+    # Identificar columnas de origen y destino dinámicamente
+    cols_lpeh_origen = [c for c in df.columns if c.startswith('lpeh')]
+    cols_per_origen = [c for c in df.columns if c.startswith('per')]
+    cols_LPEH_destino = [c for c in df.columns if c.startswith('LPEH_')]
+    cols_PER_destino = [c for c in df.columns if c.startswith('PER_')]
+
+    # Unir todas las columnas que definen el binomio
+    cols_subset = cols_lpeh_origen + cols_per_origen + cols_LPEH_destino + cols_PER_destino
+    cols_subset = [c for c in cols_subset if c in df.columns]  # Asegurar que existen
+
+    total_inicial = len(df)
+    # Eliminar duplicados basados en estas columnas
+    df_sin_duplicados = df.drop_duplicates(subset=cols_subset).copy()
+    total_final = len(df_sin_duplicados)
+
+    print(f'  -> Registros antes de limpiar: {total_inicial}')
+    print(f'  -> Registros después de limpiar: {total_final}')
+    print(f'  -> Duplicados eliminados: {total_inicial - total_final}')
+
+    return df_sin_duplicados
 
 # =============================================================================
 # --- FUNCIÓN DE SEPARACIÓN DE CASOS POR NUMERO DE COLUMNAS lpehx-LPEH_X
@@ -245,15 +276,18 @@ if __name__ == "__main__":
     print(f"Zona: {ZONA}")
     df_origen = pd.read_excel(archivo_entrada)
 
-    # 2. Aplicar pasarela a todo el DataFrame (Tu código original)
+    # 2. Aplicar pasarela a todo el DataFrame
     print("Procesando coberturas y aplicando pasarela a todos los registros...")
     df_procesado = aplicar_pasarela_df(df_origen, PASARELA_TIPESTR)
 
-    # 3. Guardar el archivo Excel global con la pasarela aplicada (Tu código original)
-    print(f"Guardando Excel resultado con pasarela aplicada en: {archivo_salida_final}...")
-    df_procesado.to_excel(archivo_salida_final, index=False)
-    print("¡Proceso principal finalizado con éxito!")
+    # 3. AÑADIDO: Eliminar duplicados antes de guardar y separar
+    df_procesado = eliminar_duplicados_binomios(df_procesado)
 
-    # 4. AÑADIDO: Ejecutar la separación usando el DataFrame ya procesado
+    # 4. Guardar el archivo Excel global con la pasarela aplicada y sin duplicados
+    print(f"\nGuardando Excel resultado final en: {archivo_salida_final}...")
+    df_procesado.to_excel(archivo_salida_final, index=False)
+    print("¡Proceso de guardado finalizado con éxito!")
+
+    # 5. Ejecutar la separación usando el DataFrame limpio
     separar_registros_por_binomios(df_procesado, ZONA, output_folder)
     print("\n¡Flujo completo finalizado!")
