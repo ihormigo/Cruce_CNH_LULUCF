@@ -6,454 +6,207 @@ import sys
 import time
 from datetime import datetime
 
-class mejora_nivel_detalle:
-    def __init__(self, ruta_input, folder_output, zona, path_gdb_vectorial):
-        self.ruta_input = ruta_input
-        self.folder_output = folder_output
-        self.zona = zona.lower()
-        self.path_gdb_vectorial = path_gdb_vectorial
-
-        # Configuración automática del filtro de zona
-        if self.zona in ['península', 'peninsula', 'p', 'pb']:
-            self.filtro_zona = '_PB_'
-        elif self.zona in ['c', 'canarias']:
-            self.filtro_zona = '_C_'
-        else:
-            self.filtro_zona = f'_{zona.upper()}_'
-
-        # Atributos internos de la clase
-        self.capa_objetivo = None
-        self.cbp_sel_fc = None
-        self.cbp_sel = None
-        self.df_mapeado = None
-        self.redondeo = None
-        self.df_pivotado = None
-        self.cbp_final_join = None
-        self.csv_limpio = None
-        self.df_1binomio = None
-        self.df_descartados_detalle = None
-        self.df_varios_binomios = None
-        self.df_LPEH1_mas = None
-        self.df_resto = None
-        self.input_excel = None
-        self.mapa_lpeh_cultivos = None
-        self.mapa_lpeh_artificiales = None
-        self.mapa_lpeh_gridcodes = None
-        self.continuar_SIN_asigna1_5_2aabb = None
-
-        os.makedirs(self.folder_output, exist_ok=True)
-
-    def cargar_vectorial(self):
-        walker = arcpy.da.Walk(self.path_gdb_vectorial, datatype="FeatureClass", type='Polygon')
-
-        for root, dirnames, filenames in walker:
-            for nombre in filenames:
-                if self.filtro_zona in nombre:
-                    self.capa_objetivo = nombre
-                    break
-            if self.capa_objetivo:
-                break
-
-        if self.capa_objetivo:
-            print(f"Capa poligonal identificada en la GDB: {self.capa_objetivo} (Se filtrará antes de cargar en RAM)")
-        else:
-            print("❌ Error: No se encontró ninguna capa de polígonos que coincida en la GDB.")
-            sys.exit()
-
-    def sel_vectorial(self):
-        seleccion = [71, 72, 75, 76, 77, 8, 811, 812, 82, 83, 84, 85, 861, 862, 863, 864, 865, 87, 88, 89]
-        lista_ids = ", ".join(map(str, seleccion))
-        where_clause = (f"id_tipestr IN ({lista_ids}) AND id_gh IS NULL AND identico_mfeff = 'ESI_TSI' and "
-                        f"(obs_tipo not like '%56%' or obs_tipo is null) and asigna_eq <> 'C'")
-
-        try:
-            print("Filtrando capa en disco con ArcPy para cultivos y artificiales...")
-            ruta_entrada = os.path.join(self.path_gdb_vectorial, self.capa_objetivo)
-
-            gdb_temporal = arcpy.env.scratchGDB
-            self.cbp_sel_fc = os.path.join(gdb_temporal, "temp_sel_art_y_cult")
-
-            if arcpy.Exists(self.cbp_sel_fc):
-                arcpy.management.Delete(self.cbp_sel_fc)
-
-            # ArcPy filtra en disco de forma ultra rápida
-            arcpy.analysis.Select(ruta_entrada, self.cbp_sel_fc, where_clause)
-
-            print("Cargando la selección en GeoPandas (para uso tabular)...")
-            self.cbp_sel = gpd.read_file(gdb_temporal, layer="temp_sel_art_y_cult")
-            self.cbp_sel['a_cnh24'] = self.cbp_sel.geometry.area
-            print(f'✅ Tras la selección quedan {len(self.cbp_sel)} registros extraídos de la GDB.')
-
-        except Exception as e:
-            print(f"❌ Error crítico al hacer la selección con ArcPy/GeoPandas: {e}")
-            sys.exit()
-
-    def cargar_tabla(self, ruta_tabla, nombre_log="datos"):
-        if not os.path.exists(ruta_tabla):
-            print(f"❌ Error: No se encontró el archivo en: {ruta_tabla}")
-            sys.exit()
-
-        print(f"Cargando {nombre_log}...")
-        _, extension = os.path.splitext(ruta_tabla)
-
-        if extension.lower() == '.csv':
-            return pd.read_csv(ruta_tabla, sep=';', encoding='utf-8-sig', low_memory=False)
-        elif extension.lower() in ['.xlsx', '.xls']:
-            return pd.read_excel(ruta_tabla)
-        else:
-            print(f"❌ Error: Formato no soportado para {ruta_tabla}. Usa .csv o .xlsx")
-            sys.exit()
-
-    def mapeo(self):
-        print("Iniciando pasarela...")
-        input_excel = self.cargar_tabla(self.ruta_input, "datos a mapear")
-        self.input_excel = input_excel
-
-        self.mapa_lpeh_cultivos = {
-            700: 'V', 710: 'V', 711: 'V621', 712: 'V54', 713: 'V622', 714: 'V6', 715: 'V6',
-            719: 'V', 720: 'V1', 721: 'V14', 722: 'J2.43', 729: 'V1',
-        }
-        self.mapa_lpeh_artificiales = {
-            800: 'J', 810: 'J', 820: 'J', 821: 'J', 822: 'J', 823: 'J', 824: 'J', 830: 'J4',
-            831: 'J4.5', 832: 'J4.4', 840: 'J4', 841: 'J4.2', 842: 'J4.3', 850: 'J3', 860: 'J6',
-            870: 'J', 880: 'V2', 881: 'V2', 883: 'V2',
-        }
-        self.mapa_lpeh_gridcodes = {
-            100: 'T', 111: 'T', 112: 'T', 121: 'T3', 122: 'T3', 131: 'T', 132: 'T', 141: 'T', 142: 'T',
-            200: 'R', 210: 'R7', 220: 'S', 230: 'R', 240: 'U54.ES',
-            400: 'U',
-            500: 'Q', 511: 'Q', 512: 'Q', 520: 'J5' , 521: 'J5.35.ES', 522: 'J5.41', 523: 'J5.413.ES', 524: 'J5.31', 526: 'J5.3',
-            527: 'J5.12', 531: 'P2', 532: 'P1', 533: 'X' , 536: 'MA2', 537: 'M',
-            65535: '65535',
-        }
-
-        mapa_lpeh = {**self.mapa_lpeh_cultivos, **self.mapa_lpeh_artificiales, **self.mapa_lpeh_gridcodes}
-
-        input_excel['LPEH'] = input_excel['gridcode'].map(mapa_lpeh).fillna(input_excel['gridcode'].astype(str))
-
-        df_agrupado = input_excel.groupby(['id_cnhv2', 'LPEH'], as_index=False)['PER'].sum()
-        df_agrupado = df_agrupado.rename(columns={'PER': 'PER_LPEH'})
-        df_agrupado['PER_R'] = df_agrupado['PER_LPEH'].round(0).astype(int)
-
-        self.df_mapeado = df_agrupado[['id_cnhv2', 'LPEH', 'PER_LPEH', 'PER_R']]
-
-        path_excel2 = os.path.normpath(
-            os.path.join(self.folder_output, f'cbp_lulucf_mapeado_{self.zona}_art_y_cult.xlsx'))
-        self.df_mapeado.to_excel(path_excel2, index=False, sheet_name='resultados')
-
-    def redondeo_mapeo(self):
-        print("Aplicando redondeo...")
-        self.df_mapeado.loc[self.df_mapeado['PER_LPEH'] < 5, 'PER_LPEH'] = 0
-        self.df_mapeado.loc[self.df_mapeado['PER_LPEH'] > 95, 'PER_LPEH'] = 100
-        self.df_mapeado['PER_LPEH'] = self.df_mapeado['PER_LPEH'].round(0).astype(int)
-
-        mapeo_ordenado = self.df_mapeado.sort_values(['id_cnhv2', 'PER_LPEH'], ascending=[False, False]).copy()
-        mapeo_ordenado['sum_per'] = mapeo_ordenado.groupby('id_cnhv2')['PER_LPEH'].transform('sum')
-        mapeo_ordenado['diferencia'] = 100 - mapeo_ordenado['sum_per']
-        mapeo_ordenado['es_maximo'] = ~mapeo_ordenado.duplicated(subset=['id_cnhv2'])
-
-        mapeo_ordenado['PER_R_new'] = mapeo_ordenado['PER_LPEH']
-        mapeo_ordenado.loc[mapeo_ordenado['es_maximo'], 'PER_R_new'] += mapeo_ordenado['diferencia']
-
-        self.redondeo = mapeo_ordenado.loc[mapeo_ordenado['PER_R_new'] > 0, ['id_cnhv2', 'LPEH', 'PER_R_new']]
-        print("Proceso de redondeo, asignación de remanentes y filtrado completado con éxito.")
-
-    def pivotar(self):
-        print("Pivotando datos...")
-
-        def distribuir_LPEH(grupo):
-            if self.redondeo is not None:
-                grupo = grupo.sort_values(['PER_R_new'], ascending=[False])
-            else:
-                grupo = grupo.sort_values(['PER_LPEH'], ascending=[False])
-
-            resultado = {}
-            for i, row in enumerate(grupo.itertuples(), 1):
-                resultado[f'LPEH_{i}'] = row.LPEH
-                if self.redondeo is not None:
-                    resultado[f'PER_{i}'] = row.PER_R_new
-                else:
-                    resultado[f'PER_{i}'] = row.PER_LPEH
-            return pd.Series(resultado)
-
-        if self.redondeo is not None:
-            df_series = self.redondeo.groupby('id_cnhv2').apply(distribuir_LPEH)
-        else:
-            df_series = self.df_mapeado.groupby('id_cnhv2').apply(distribuir_LPEH)
-
-        if isinstance(df_series, pd.Series):
-            self.df_pivotado = df_series.unstack().reset_index()
-        else:
-            self.df_pivotado = df_series.reset_index()
-
-        self.df_pivotado = self.df_pivotado.drop_duplicates(subset=['id_cnhv2'])
-
-        path_excel_pivot = os.path.normpath(
-            os.path.join(self.folder_output, f'cbp_lulucf_final_{self.zona}_todos_pivotado.xlsx'))
-        self.df_pivotado.to_excel(path_excel_pivot, index=False, sheet_name="resultados_pivot")
-        # HASTA AQUI BIEN
-
-    def union_tablas(self):
-        # 1. Buscar la capa dentro de los datasets de la GDB usando el filtro de zona
-        ruta_fc = None
-        for root, _, filenames in arcpy.da.Walk(self.path_gdb_vectorial, datatype="FeatureClass"):
-            for fc in filenames:
-                if self.filtro_zona in fc:
-                    ruta_fc = os.path.join(root, fc)
-                    break
-            if ruta_fc:
-                break
-
-        # 2. Extraer la tabla de atributos omitiendo la geometría (rápido y directo)
-        campos = [f.name for f in arcpy.ListFields(ruta_fc) if f.type != 'Geometry']
-        with arcpy.da.SearchCursor(ruta_fc, campos) as cursor:
-            df_gdb = pd.DataFrame(cursor, columns=campos)
-
-        # 3. Asegurar mismo tipo numérico (int64 para el Long de ArcGIS) en ambos lados
-        df_gdb['id_cnhv2'] = df_gdb['id_cnhv2'].astype('int64')
-        self.df_pivotado['id_cnhv2'] = self.df_pivotado['id_cnhv2'].astype('int64')
-
-        # 4. Cruzar tablas (Left Join) conectando df_pivotado con la GDB
-        self.tablas_unidas = pd.merge(self.df_pivotado, df_gdb, on='id_cnhv2', how='left')
-
-        # 5. Separar los registros según el campo 'asigna_lpeh1'
-        # Pasamos a texto y quitamos posibles espacios fantasma
-        asigna_str = self.tablas_unidas['asigna_lpeh1'].astype(str).str.strip()
-
-        # Filtro: Que contenga '5' (5, 5a, 5b) O que sea exactamente '2aa' o '2bb'
-        mask_descartes = asigna_str.str.contains('5', na=False) | asigna_str.isin(['2aa', '2bb'])
-
-        descartes_filtros = self.tablas_unidas[mask_descartes]
-        self.continuar_SIN_asigna1_5_2aabb = self.tablas_unidas[~mask_descartes]
-
-        filas_unidas = len(self.tablas_unidas)
-        filas_descartes = len(descartes_filtros)
-        filas_continuar = len(self.continuar_SIN_asigna1_5_2aabb)
-
-        print("\n" + "=" * 60)
-        print(f"📊 CONTROL DE REGISTROS - ZONA: {self.zona}")
-        print("=" * 60)
-        print(f"Total en Tabla Unida: {filas_unidas} registros")
-        print(f" - Descartes (contiene 5, es 2aa o 2bb): {filas_descartes} registros")
-        print(f" - Continuar depuración: {filas_continuar} registros")
-        print("=" * 60 + "\n")
-
-        # 6. Exportar los dos archivos de salida específicos a CSV
-        path_descartes = os.path.join(self.folder_output,
-                                      f'revisar_descartes_filtros_asigna1_{self.zona}_art_y_cult.csv')
-        path_continuar = os.path.join(self.folder_output, f'continuar_dep_filtros_asigna1_{self.zona}_art_y_cult.csv')
-
-        descartes_filtros.to_csv(path_descartes, sep=';', index=False, encoding='utf-8-sig')
-        self.continuar_SIN_asigna1_5_2aabb.to_csv(path_continuar, sep=';', index=False, encoding='utf-8-sig')
-
-    def eliminacion_duplicados_lpehx_LPEHX_px_PERX(self):
-        print("Filtrando y exportando registros duplicados (coincidencia total)...")
-
-        df = self.continuar_SIN_asigna1_5_2aabb.copy()
-
-        # Identificar dinámicamente todos los índices numéricos de posición (1, 2, 3...)
-        posiciones = sorted(list({int(col.replace('LPEH_', '').replace('lpeh', ''))
-                                  for col in df.columns if
-                                  col.startswith('LPEH_') or (col.startswith('lpeh') and col[4:].isdigit())}))
-
-        # Inicializar la máscara: asumimos True para todas las filas y filtramos con lógica AND
-        es_duplicado_fila = pd.Series(True, index=df.index)
-
-        for num in posiciones:
-            col_lpeh = f'LPEH_{num}'
-            col_per = f'PER_{num}'
-            col_gdb_lpeh = f'lpeh{num}'
-            col_gdb_p = f'p{num}'
-
-            # Obtener las columnas; si no existen en el DataFrame se tratan como vacías (NaN)
-            s_lpeh = df[col_lpeh] if col_lpeh in df.columns else pd.Series(None, index=df.index, dtype=object)
-            s_per = df[col_per] if col_per in df.columns else pd.Series(None, index=df.index, dtype=float)
-            s_gdb_lpeh = df[col_gdb_lpeh] if col_gdb_lpeh in df.columns else pd.Series(None, index=df.index,
-                                                                                       dtype=object)
-            s_gdb_p = df[col_gdb_p] if col_gdb_p in df.columns else pd.Series(None, index=df.index, dtype=float)
-
-            # Caso A: Ambos lados están vacíos (coincidencia correcta por ausencia)
-            ambos_vacios = s_lpeh.isna() & s_gdb_lpeh.isna()
-
-            # Caso B: Ambos lados tienen datos Y cumplen estrictamente con los dos criterios
-            ambos_rellenos_y_coinciden = (
-                    s_lpeh.notna() & s_gdb_lpeh.notna() &
-                    (s_lpeh.astype(str).str.strip() == s_gdb_lpeh.astype(str).str.strip()) &
-                    ((s_per.astype(float) - s_gdb_p.astype(float)).abs() < 5)
-            )
-
-            # El par actual debe cumplir obligatoriamente el Caso A o el Caso B
-            es_duplicado_fila &= (ambos_vacios | ambos_rellenos_y_coinciden)
-
-        # Separación final de los DataFrames
-        duplicados_lpehx_LPEHX = df[es_duplicado_fila]
-        self.NO_duplicados_continuar_depuracion_lpehx_LPEHX = df[~es_duplicado_fila]
-
-        # Definición de las rutas de salida con los nombres exactos solicitados
-        path_duplicados = os.path.join(self.folder_output,
-                                       f'revision_INTERNA_duplicados_lpehx_LPEHX_px_PERX_{self.zona}_art_y_cult.csv')
-        path_continuar = os.path.join(self.folder_output,
-                                      f'continuar_SIN_duplicados_lpehx_LPEHX_px_PERX_{self.zona}_art_y_cult.csv')
-
-        # Exportación a archivos CSV respetando el delimitador ';' habitual de tu flujo
-        duplicados_lpehx_LPEHX.to_csv(path_duplicados, sep=';', index=False, encoding='utf-8-sig')
-        self.NO_duplicados_continuar_depuracion_lpehx_LPEHX.to_csv(path_continuar, sep=';', index=False,
-                                                                   encoding='utf-8-sig')
-        print(
-            f"✅ Proceso completado. Duplicados extraídos: {len(duplicados_lpehx_LPEHX)} | Registros limpios para continuar: {len(self.NO_duplicados_continuar_depuracion_lpehx_LPEHX)}")
-
-    def clasificacion_para_revision_manual(self):
-        print("\nClasificando registros por presencia de V/J y sumas condicionales...")
-
-        # Partimos de la capa limpia de duplicados de la función anterior
-        df = self.NO_duplicados_continuar_depuracion_lpehx_LPEHX.copy()
-        total_inicial = len(df)
-
-        # -------------------------------------------------------------------------
-        # 1. SEPARACIÓN PRINCIPAL: LPEH_1 contiene o no V o J
-        # -------------------------------------------------------------------------
-        mask_lpeh1_vj = df['LPEH_1'].str.contains('V|J', case=False, na=False)
-
-        self.registros_LPEH_1_CON_Vs_Js = df[mask_lpeh1_vj].copy()
-        self.registros_LPEH_1_SIN_Vs_Js = df[~mask_lpeh1_vj].copy()
-
-        # -------------------------------------------------------------------------
-        # 2. RAMA: LPEH_1 SIN Vs/Js
-        # -------------------------------------------------------------------------
-        df_sin = self.registros_LPEH_1_SIN_Vs_Js.copy()
-        cols_lpeh_2_plus = [col for col in df_sin.columns if col.startswith('LPEH_') and col != 'LPEH_1']
-
-        # Evaluar si LPEH_2, 3, 4... contienen V o J en alguna de sus columnas
-        mask_any_vj_2_plus = pd.Series(False, index=df_sin.index)
-        for col in cols_lpeh_2_plus:
-            mask_any_vj_2_plus |= df_sin[col].str.contains('V|J', case=False, na=False)
-
-        self.LPEH_2_X_SI_VJ = df_sin[mask_any_vj_2_plus].copy()
-        self.LPEH_2_X_NO_VJ = df_sin[~mask_any_vj_2_plus].copy()
-
-        # -------------------------------------------------------------------------
-        # 3. RAMA: LPEH_1 CON Vs/Js
-        # -------------------------------------------------------------------------
-        df_con = self.registros_LPEH_1_CON_Vs_Js.copy()
-        cols_lpeh_todas = [col for col in df_con.columns if col.startswith('LPEH_')]
-
-        suma_per_vj = pd.Series(0.0, index=df_con.index)
-
-        # Sumar PER_X estrictamente si su respectivo LPEH_X contiene V o J
-        for col_lpeh in cols_lpeh_todas:
-            num = col_lpeh.split('_')[1]
-            col_per = f'PER_{num}'
-
-            if col_per in df_con.columns:
-                mask_vj_pos = df_con[col_lpeh].str.contains('V|J', case=False, na=False)
-                per_num = pd.to_numeric(df_con[col_per], errors='coerce').fillna(0)
-                # .where() de Pandas: si la máscara es True deja el porcentaje, si es False suma 0
-                suma_per_vj += per_num.where(mask_vj_pos, 0)
-
-        # Subdivisión por umbrales (matemáticamente cerrados para no perder decimales)
-        self.suma_PERs_X_CON_Vs_Js_menor_igual_70 = df_con[suma_per_vj <= 70].copy()
-        self.suma_PERs_X_CON_Vs_Js_70_85 = df_con[(suma_per_vj > 70) & (suma_per_vj < 85)].copy()
-        self.suma_PERs_X_CON_Vs_Js_mayor_igual_85 = df_con[suma_per_vj >= 85].copy()
-
-        # -------------------------------------------------------------------------
-        # 4. EXPORTACIÓN A CSV
-        # -------------------------------------------------------------------------
-        archivos_generar = {
-            'registros_LPEH_1_SIN_Vs_Js.csv': self.registros_LPEH_1_SIN_Vs_Js,
-            'registros_LPEH_1_CON_Vs_Js.csv': self.registros_LPEH_1_CON_Vs_Js,
-            f'revision_cruce_LPEH_2_X_SI_VJ_{self.zona}.csv': self.LPEH_2_X_SI_VJ,
-            f'revision_cruce_LPEH_2_X_NO_VJ_{self.zona}.csv': self.LPEH_2_X_NO_VJ,
-            'revision_cruce_suma_PERs_X_CON_Vs_Js_menor_igual_70.csv': self.suma_PERs_X_CON_Vs_Js_menor_igual_70,
-            'revision_cruce_suma_PERs_X_CON_Vs_Js_70_85.csv': self.suma_PERs_X_CON_Vs_Js_70_85,
-            'revision_mejorar_detalle_cruce_suma_PERs_X_CON_Vs_Js_mayor_igual_85.csv': self.suma_PERs_X_CON_Vs_Js_mayor_igual_85
-        }
-
-        for nombre_csv, df_out in archivos_generar.items():
-            ruta = os.path.join(self.folder_output, nombre_csv)
-            df_out.to_csv(ruta, sep=';', index=False, encoding='utf-8-sig')
-
-        # -------------------------------------------------------------------------
-        # 5. CONTROL DE BALANCE DE REGISTROS
-        # -------------------------------------------------------------------------
-        subtotal_sin = len(self.LPEH_2_X_SI_VJ) + len(self.LPEH_2_X_NO_VJ)
-        subtotal_con = (len(self.suma_PERs_X_CON_Vs_Js_menor_igual_70) +
-                        len(self.suma_PERs_X_CON_Vs_Js_70_85) +
-                        len(self.suma_PERs_X_CON_Vs_Js_mayor_igual_85))
-
-        total_salida = subtotal_sin + subtotal_con
-
-        print("\n" + "=" * 65)
-        print("         CONTROL DE REGISTROS: CRUCE V/J Y SUMAS")
-        print("=" * 65)
-        print(f"Total inicial de registros a clasificar: {total_inicial}")
-        print(f"  ├── 1. LPEH_1 SIN Vs/Js:                      {len(self.registros_LPEH_1_SIN_Vs_Js)}")
-        print(f"  │     ├── LPEH_2+ CON algún V/J:              {len(self.LPEH_2_X_SI_VJ)}")
-        print(f"  │     └── LPEH_2+ SIN ningún V/J:             {len(self.LPEH_2_X_NO_VJ)}")
-        print(f"  │")
-        print(f"  └── 2. LPEH_1 CON Vs/Js:                      {len(self.registros_LPEH_1_CON_Vs_Js)}")
-        print(f"        ├── Suma PER_X (solo V/J) <= 70%:       {len(self.suma_PERs_X_CON_Vs_Js_menor_igual_70)}")
-        print(f"        ├── Suma PER_X (solo V/J) > 70% y < 85%: {len(self.suma_PERs_X_CON_Vs_Js_70_85)}")
-        print(f"        └── Suma PER_X (solo V/J) >= 85%:       {len(self.suma_PERs_X_CON_Vs_Js_mayor_igual_85)}")
-        print("-" * 65)
-        print(f"  Subtotal Rama SIN: {subtotal_sin} | Subtotal Rama CON: {subtotal_con}")
-        print(f"  Total sumando las 5 ramas finales:            {total_salida}")
-        print(f"  CUADRE PERFECTO (Entrada == Salida):          {'✅ SÍ' if total_inicial == total_salida else '❌ NO'}")
-        print("=" * 65 + "\n")
-
-
-########################################################################################################################
-def ejecutar_cruce_lulucf():
-    ruta_datos = os.path.normpath(input("Introduce la ruta del fichero (.csv o .xlsx) con los datos a volcar"
-                                        "\n Los campos lpehx y px deben tener la siguiente estructura:"
-                                        "\n LPEH_X y PER_X \n>"))
-    ruta_gdb = os.path.normpath(input("\nIntroduce la ruta de la GDB, debe de ser la carpeta.gdb que contiene los datos no debe estar "
-                                      "\n contenida dentro de otra carpeta con el mismo nombre (como ocurre al descomprimir)\n>"))
-    carpeta_salida = os.path.normpath(input("\nIntroduce la ruta de la carpeta de salida\n>"))
-
-    # 1. Determinación automática de la zona a partir del archivo de entrada
-    nombre_archivo = os.path.basename(ruta_datos).lower()
-    zona_analisis = "c" if "_c_" in nombre_archivo else "pb" if "_pb_" in nombre_archivo else "desconocida"
-
-    print(f"\n--- Iniciando procesamiento para zona '{zona_analisis}' ---")
-
-    # 2. Inicialización de la clase con los parámetros proporcionados
-    procesador = mejora_nivel_detalle(
-        ruta_input=ruta_datos,
-        folder_output=carpeta_salida,
-        zona=zona_analisis,
-        path_gdb_vectorial=ruta_gdb
+output_folder = r"C:\Users\ihormigo\Desktop\resultados_cruce\3 Resultados Atlas y 2a parte metod\2 Resultados a procesar\2a parte metodologia (binomios 1_1)\PB mejora detalle 1_1"
+input_table = r"C:\Users\ihormigo\Desktop\resultados_cruce\3 Resultados Atlas y 2a parte metod\2 Resultados a procesar\2a parte metodologia (binomios 1_1)\0 Datos brutos de las revisiones\PB_caso3_no_muestreado_2a_parte.xlsx"
+
+def seleccion_1binomio_multibinomio(self):
+    print('\nIniciando selección de los registros con 1 binomio...')
+
+    if self.csv_limpio is None:
+        print("❌ Error: No hay datos en memoria. Asegúrate de que el Join se ha ejecutado.")
+        return
+
+    df_csv_limpio = self.csv_limpio.copy()
+
+    cols_lpeh_resto = [c for c in df_csv_limpio.columns if
+                       c.startswith('lpeh') and c != 'lpeh1' and c.replace('lpeh', '').isdigit()]
+
+    cond_lpeh1 = df_csv_limpio['lpeh1'].notna() & (df_csv_limpio['lpeh1'] != '')
+
+    if cols_lpeh_resto:
+        cond_resto = df_csv_limpio[cols_lpeh_resto].replace('', pd.NA).isna().all(axis=1)
+    else:
+        cond_resto = pd.Series(True, index=df_csv_limpio.index)
+
+    mascara_final = cond_lpeh1 & cond_resto # 1 binomio y el resto de binomios tienen valores nulos
+    conteo = mascara_final.value_counts()
+    print(
+        f"📊 Reporte 1-Binomio -> Seleccionados: {conteo.get(True, 0)} | Descartados: {conteo.get(False, 0)} | Total: {len(mascara_final)}")
+
+    # =========================================================================
+    # SE USA MÁS ADELANTE EN LA FUNCIÓN "seleccion_mas_detalle_multibinomio"
+    # =========================================================================
+    self.df_varios_binomios = df_csv_limpio[~mascara_final].copy()
+    path_varios_binomios = os.path.normpath(
+        os.path.join(self.folder_output, f'registros_varios_binomios_lpehx_{self.zona}.csv')
     )
+    self.df_varios_binomios.to_csv(path_varios_binomios, index=False, sep=';', encoding='utf-8-sig')
+    print(
+        f"✅ CSV de registros con varios binomios de origen exportado en: {path_varios_binomios} | {len(self.df_varios_binomios)} registros "
+        f"de un total de {len(df_csv_limpio)} registros.")
+    # =========================================================================
 
-    # 3. Flujo de ejecución lineal y secuencial
-    procesador.cargar_vectorial()  # Busca la capa correspondiente en la GDB
-    procesador.sel_vectorial()  # Filtra en disco con ArcPy y extrae a GeoPandas
-    procesador.mapeo()  # Realiza el mapeo de los códigos de cultivo/artificiales
-    procesador.redondeo_mapeo()  # Ajusta porcentajes y distribuye remanentes
-    procesador.pivotar()  # Transforma los registros a formato horizontal (LPEH_X)
+    self.df_1binomio = df_csv_limpio[mascara_final].copy()
 
-    procesador.union_tablas() # ADEMAS SE FILTRAN LOS REGISTROS POR "asigna_lpeh1 = 5"
-    procesador.eliminacion_duplicados_lpehx_LPEHX_px_PERX()
-    
-    procesador.clasificacion_para_revision_manual()
-    
-    print(f"\n🚀 ¡Proceso completado con éxito para la zona '{zona_analisis}'!")
+    path_output = os.path.join(self.folder_output, f'cruce_solo_1binomio_{self.zona}_art_y_cult.csv')
+    self.df_1binomio.to_csv(path_output, index=False, sep=';', encoding='utf-8-sig')
+    print(f'✅ Registros con 1 binomio exportados correctamente en: {path_output}')
 
+def seleccion_mas_detalle_1_binomio(self):
+    print('\nIniciando clasificación y exportación de registros por nivel de detalle...')
 
-########################################################################################################################
-if __name__ == "__main__":
-    fecha_hora_inicio = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"🚀 Ejecución iniciada el: {fecha_hora_inicio}\n")
-    ini = time.time()
+    if self.df_1binomio is None or self.df_1binomio.empty:
+        print("⚠️ Aviso: No hay registros para analizar.")
+        return
 
-    ejecutar_cruce_lulucf()
+    # 1. Identificar si existen columnas LPEH adicionales (LPEH_2, LPEH_3, etc.)
+    lpeh_extras = [col for col in self.df_1binomio.columns if col.startswith('LPEH_') and col != 'LPEH_1']
 
-    print("\n" + "="*50)
-    fin = time.time()
-    tiempo_total = fin-ini
-    print(f"⏱️ El proceso ha tardado: {tiempo_total:.2f} segundos")
-    print("="*50)
+    # Función de limpieza para medir longitudes de forma justa
+    def limpiar_para_conteo(col):
+        return col.fillna('').astype(str).str.replace('.', '', regex=False).str.replace('ES', 'X', regex=False)
 
-    # C:\Users\ihormigo\Desktop\resultados_cruce\datos\cbp_lulucf_pb_art_y_cult.csv
-    # C:\Users\ihormigo\Desktop\resultados_cruce\datos\Datos_originales\preCNH24_int_AAF_20260622.gdb
-    # C:\Users\ihormigo\Desktop\resultados_cruce\resultados_tablas
+    len_original = limpiar_para_conteo(self.df_1binomio['lpeh1']).str.len()
+    len_nuevo = limpiar_para_conteo(self.df_1binomio['LPEH_1']).str.len()
 
+    # 2. Detectar si alguna de las otras columnas LPEH_X tiene texto (2 o más binomios)
+    tiene_otros_lpeh = False
+    if lpeh_extras:
+        tiene_otros_lpeh = self.df_1binomio[lpeh_extras].fillna('').astype(str).apply(
+            lambda x: x.str.strip() != '').any(axis=1)
+
+    # Condición base: Solo existen datos en lpeh1 y LPEH_1 (las demás LPEH_X están vacías)
+    cond_solo_1_y_1 = ~tiene_otros_lpeh
+
+    # 3. Segmentación según tus nuevas directrices
+
+    # CSV 1: lpeh1 tiene MAYOR o IGUAL nivel de detalle que LPEH_1 (Casos a revisar)
+    cond_lpeh1_mas_o_igual = cond_solo_1_y_1 & (len_original >= len_nuevo)
+    df_lpeh1_mas = self.df_1binomio[cond_lpeh1_mas_o_igual].copy()
+
+    # CSV 2: LPEH_1 tiene MAYOR nivel de detalle que lpeh1 (Casos listos para volcar)
+    cond_LPEH1_mas_detalle = cond_solo_1_y_1 & (len_nuevo > len_original)
+    self.df_LPEH1_mas = self.df_1binomio[cond_LPEH1_mas_detalle].copy()
+
+    # CSV 3: El resto de los casos (Principalmente registros con lpeh1 y 2 o más LPEH_X)
+    cond_resto_casos = ~(cond_lpeh1_mas_o_igual | cond_LPEH1_mas_detalle)
+    df_resto_temporal = self.df_1binomio[cond_resto_casos].copy()
+
+    # CSV 4: Del resto de casos aislamos aquellos con "asigna_lpeh = 5"
+    cond_asigna_5 = pd.to_numeric(df_resto_temporal['asigna_lpeh1'], errors='coerce') == 5
+    df_resto_asigna_5 = df_resto_temporal[cond_asigna_5].copy()
+
+    # CSV 3 (El Resto Real): Nos quedamos con lo que NO tenía asigna_lpeh1 == 5
+    self.df_resto = df_resto_temporal[~cond_asigna_5].copy()
+
+    # 4. Definición de rutas con los nombres exactos solicitados
+    # A REVISAR:
+    #   * Registros lpeh1 > LPEH_1 (1:1)
+    #   * Registros lpeh1 y LPEH_1,2,3...X (1:X) CON "asigna = 5"
+    # SE VUELCAN:
+    #   * Registros lpeh1 < LPEH_1 (1:1)
+    #   * Registros lpeh1 y LPEH_1,2,3...X (1:X) SIN "asigna = 5"
+
+    path_lpeh1_mas = os.path.join(self.folder_output, f'revision_lpeh1_mas_detalle_LPEH1_{self.zona}.csv')
+    path_LPEH1_mas = os.path.join(self.folder_output, f'volcar_LPEH1_mas_detalle_lpeh1_{self.zona}.csv')
+    path_resto = os.path.join(self.folder_output, f'volcar_lpeh1_VARIOS_LPEH_X_NO_asigna_5_{self.zona}.csv')
+    path_resto_asigna_5 = os.path.join(self.folder_output, f'revision_lpeh1_varios_LPEH_X_asigna_5_{self.zona}.csv')
+
+    # 5. Exportación a CSV
+    df_lpeh1_mas.to_csv(path_lpeh1_mas, index=False, sep=';', encoding='utf-8-sig')
+    self.df_LPEH1_mas.to_csv(path_LPEH1_mas, index=False, sep=';', encoding='utf-8-sig')
+    self.df_resto.to_csv(path_resto, index=False, sep=';', encoding='utf-8-sig')
+    df_resto_asigna_5.to_csv(path_resto_asigna_5, index=False, sep=';', encoding='utf-8-sig')
+
+    # 6. Reporte por consola para control
+    print(f'✅ CSV 1 Guardado (Revisar: lpeh1 >= LPEH_1) -> {path_lpeh1_mas} | {len(df_lpeh1_mas)} reg.')
+    print(f'✅ CSV 2 Guardado (Volcar: LPEH_1 > lpeh1)  -> {path_LPEH1_mas} | {len(self.df_LPEH1_mas)} reg.')
+    print(f'✅ CSV 3 Guardado (Bloque Depuración: 2+ LPEH) -> {path_resto} | {len(self.df_resto)} reg.')
+    print \
+        (f'📂 CSV 4 Guardado (Filtro Varios LPEH con asigna 5) -> {path_resto_asigna_5} | {len(df_resto_asigna_5)} reg.')
+
+    print \
+        (f"\n📊 [RESUMEN ] Total procesados: {len(df_lpeh1_mas) + len(self.df_LPEH1_mas) + len(self.df_resto) + len(df_resto_asigna_5)} registros.")
+    # HASTA AQUI
+
+# region MULTIBINOMIO (MÁS ADELANTE)
+# def seleccion_mas_detalle_multibinomio(self):
+#     print('\nIniciando clasificación de registros multibinómicos (2 o más binomios)...')
+#
+#     # 1. 🟢 Control de entrada optimizado: validamos la existencia de la tabla ya segmentada
+#     if not hasattr(self, 'df_varios_binomios') or self.df_varios_binomios is None or self.df_varios_binomios.empty:
+#         print("⚠️ Aviso: No existen registros con 2 o más binomios para analizar o falta ejecutar el paso previo.")
+#         return
+#
+#     # 🟢 Clonamos y procesamos directamente el subset precalculado
+#     df_multibinomio = self.df_varios_binomios.copy()
+#
+#     # ==========================================================================================
+#     # Extraer registros con "5" en columnas asigna_lpehX antes de continuar
+#     # ==========================================================================================
+#     # Identificar dinámicamente las columnas asigna_lpeh1, asigna_lpeh2, etc.
+#     cols_asigna = [c for c in df_multibinomio.columns if
+#                    c.startswith('asigna_lpeh') and c.replace('asigna_lpeh', '').isdigit()]
+#
+#     if cols_asigna:
+#         # Buscamos el carácter '5' en cualquiera de estas columnas (equivalente al HALLAR de Excel)
+#         # Convertimos a string y rellenamos vacíos para evitar falsos positivos con 'nan'
+#         filtro_contiene_5 = df_multibinomio[cols_asigna].fillna('').astype(str).apply(
+#             lambda col: col.str.contains('5')
+#         ).any(axis=1)
+#
+#         # Separamos los registros que cumplen la condición
+#         df_asigna_con_5 = df_multibinomio[filtro_contiene_5].copy()
+#
+#         # Dejamos en el DataFrame principal SOLO los registros restantes (la mayoría)
+#         df_multibinomio = df_multibinomio[~filtro_contiene_5].copy()
+#
+#         # Exportamos los registros extraídos con "5"
+#         path_asigna_5 = os.path.normpath(
+#             os.path.join(self.folder_output, f'revision_mas2binomios_asigna_lpeh_con_5_{self.zona}.csv'))
+#         df_asigna_con_5.to_csv(path_asigna_5, index=False, sep=';', encoding='utf-8-sig')
+#
+#         print(
+#             f'⚠️ CSV Especial Guardado (Contienen "5" en asigna_lpeh) -> {path_asigna_5} | {len(df_asigna_con_5)} registros '
+#             f'de un total de {len(df_multibinomio)} registros. ')
+#     else:
+#         print("⚠️ Aviso: No se encontraron columnas que empiecen por 'asigna_lpehX'.")
+#     # ==========================================================================================
+#
+#     # 3. Identificar dinámicamente todas las columnas de conteo lpeh y LPEH_
+#     cols_lpeh_origen = [c for c in df_multibinomio.columns if
+#                         c.startswith('lpeh') and c.replace('lpeh', '').isdigit()]
+#     cols_LPEH_destino = [c for c in df_multibinomio.columns if
+#                          c.startswith('LPEH_') and c.replace('LPEH_', '').isdigit()]
+#
+#     # 4. Contar fila por fila cuántas columnas tienen valores reales
+#     conteo_origen = df_multibinomio[cols_lpeh_origen].replace('', pd.NA).notna().sum(axis=1)
+#     conteo_destino = df_multibinomio[cols_LPEH_destino].replace('', pd.NA).notna().sum(axis=1)
+#
+#     # 5. Calcular la diferencia (Destino - Origen)
+#     df_multibinomio['diferencia_binomios'] = conteo_destino - conteo_origen
+#
+#     # 6. Segmentar según la diferencia
+#     df_mas_detalle = df_multibinomio[df_multibinomio['diferencia_binomios'] > 0].copy()
+#     df_igual_detalle = df_multibinomio[df_multibinomio['diferencia_binomios'] == 0].copy()
+#     df_menos_detalle = df_multibinomio[df_multibinomio['diferencia_binomios'] < 0].copy()
+#
+#     # 7. Definición de rutas de salida
+#     path_mas = os.path.normpath(
+#         os.path.join(self.folder_output, f'revision_mas2binomios_mas_detalle_LPEH_X_{self.zona}.csv'))
+#     path_igual = os.path.normpath(
+#         os.path.join(self.folder_output, f'revisar_mas2binomios_igual_nivel_detalle_{self.zona}.csv'))
+#     path_menos = os.path.normpath(
+#         os.path.join(self.folder_output, f'descartes_mas2binomios_menos_detalle_LPEH_X_{self.zona}.csv'))
+#
+#     # 8. Exportación a CSV
+#     df_mas_detalle.to_csv(path_mas, index=False, sep=';', encoding='utf-8-sig')
+#     df_igual_detalle.to_csv(path_igual, index=False, sep=';', encoding='utf-8-sig')
+#     df_menos_detalle.to_csv(path_menos, index=False, sep=';', encoding='utf-8-sig')
+#
+#     # 9. Reporte por consola
+#     print(f'✅ CSV 1 Guardado (Diferencia > 0: Más detalle)   -> {path_mas} | {len(df_mas_detalle)} reg.')
+#     print(f'✅ CSV 2 Guardado (Diferencia = 0: Igual detalle) -> {path_igual} | {len(df_igual_detalle)} reg.')
+#     print(f'❌ CSV 3 Guardado (Diferencia < 0: Menos detalle) -> {path_menos} | {len(df_menos_detalle)} reg.')
+#     print(f'📊 [RESUMEN MULTIBINOMIO] Total procesados: {len(df_multibinomio)} registros.')
+# endregion  ()
