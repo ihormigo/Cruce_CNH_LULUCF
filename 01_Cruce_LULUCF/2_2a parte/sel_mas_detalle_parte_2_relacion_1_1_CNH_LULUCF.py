@@ -276,6 +276,7 @@ if __name__ == "__main__":
     print(f"Zona: {ZONA}")
     df_origen = pd.read_excel(archivo_entrada)
 
+
     # 2. Aplicar pasarela a todo el DataFrame
     print("Procesando coberturas y aplicando pasarela a todos los registros...")
     df_procesado = aplicar_pasarela_df(df_origen, PASARELA_TIPESTR)
