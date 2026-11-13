@@ -260,9 +260,6 @@ class metodologia_2a_parte:
         self.df = df_solo_lpeh1_LPEH_1
         return self.df
 
-    # =========================================================================
-    # FUNCIÓN 5 (NUEVA): Comparación de detalle en casos 1:1 (lpeh1 vs LPEH_1)
-    # =========================================================================
 # =========================================================================
     # FUNCIÓN 5: Comparación de detalle en casos 1:1 (lpeh1 vs LPEH_1)
     # =========================================================================
@@ -297,17 +294,38 @@ class metodologia_2a_parte:
         df_mejora = self.df[mascara_mejora].copy()
         df_sin_mejora = self.df[~mascara_mejora].copy()
 
-        # Guardar CSV de mejora
-        path_mejora = os.path.join(output_folder, f'mejora_detalle_LPEH_1_lpeh1_{zona}.csv')
-        df_mejora.to_csv(path_mejora, index=False, sep=';', encoding='utf-8-sig')
+        # Bifurcación: Mismo prefijo vs Distinto prefijo
+        def _es_mismo_prefijo(row):
+            orig = str(row['lpeh1']).strip().replace('.', '')
+            dest = str(row['LPEH_1']).strip().replace('.', '')
+            return orig in dest
 
-        # Guardar CSV de revisión (sin mejora)
+        if not df_mejora.empty:
+            mascara_mismo_prefijo = df_mejora.apply(_es_mismo_prefijo, axis=1)
+            df_mismo_prefijo = df_mejora[mascara_mismo_prefijo].copy()
+            df_distinto_prefijo = df_mejora[~mascara_mismo_prefijo].copy()
+        else:
+            df_mismo_prefijo = pd.DataFrame(columns=self.df.columns)
+            df_distinto_prefijo = pd.DataFrame(columns=self.df.columns)
+
+        # Guardar CSVs con mejora
+        path_mejora_mismo = os.path.join(output_folder, f'mejora_detalle_LPEH_1_lpeh1_{zona}_mismo_prefijo.csv')
+        df_mismo_prefijo.to_csv(path_mejora_mismo, index=False, sep=';', encoding='utf-8-sig')
+
+        path_mejora_distinto = os.path.join(output_folder,
+                                            f'revision_mejora_detalle_LPEH_1_lpeh1_{zona}_distinto_prefijo.csv')
+        df_distinto_prefijo.to_csv(path_mejora_distinto, index=False, sep=';', encoding='utf-8-sig')
+
+        # Guardar CSVs sin mejora
         path_sin_mejora = os.path.join(output_folder, f'revision_detalle_lpeh1_LPEH_1_{zona}.csv')
         df_sin_mejora.to_csv(path_sin_mejora, index=False, sep=';', encoding='utf-8-sig')
 
         print(f'  -> Registros 1:1 evaluados: {len(self.df)}')
         print(f'  -> Registros con mejora (LPEH_1 > lpeh1): {len(df_mejora)}')
-        print(f'  -> 📄 Archivo guardado en: {path_mejora}')
+        print(f'     ├── Mismo prefijo (lpeh1 contenido en LPEH_1): {len(df_mismo_prefijo)}')
+        print(f'     │   📄 Archivo guardado en: {path_mejora_mismo}')
+        print(f'     └── Distinto prefijo: {len(df_distinto_prefijo)}')
+        print(f'         📄 Archivo guardado en: {path_mejora_distinto}')
         print(f'  -> Registros sin mejora (LPEH_1 <= lpeh1): {len(df_sin_mejora)}')
         print(f'  -> 📄 Archivo guardado en: {path_sin_mejora}\n')
 
