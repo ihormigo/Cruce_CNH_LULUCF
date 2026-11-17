@@ -41,6 +41,7 @@ class cruce:
         self.df_pivotado = None
         self.lulucf_filtrado = False
         self.csv_limpio = None
+        self.grupo = None
 
         # Atributos para rutas temporales seguras
         self.cbp_sel_fc = None
@@ -80,16 +81,19 @@ class cruce:
     # ------------------------------------------------------------------------------------------#
 
     def sel_vectorial(self):
-        seleccion = [71, 72, 75, 76, 77, 8, 811, 812, 82, 83, 84, 85, 861, 862, 863, 864, 865, 87, 88, 89]
+        if self.grupo == '7s':
+            seleccion = [71, 72, 75, 76, 77]
+        else:  # self.grupo == '8s'
+            seleccion = [8, 811, 812, 82, 83, 84, 85, 861, 862, 863, 864, 865, 87, 88, 89]
 
         lista_ids = ", ".join(map(str, seleccion))
         where_clause = f"id_tipestr IN ({lista_ids}) AND id_gh IS NULL AND identico_mfeff = 'ESI_TSI' and (obs_tipo not like '%56%' or obs_tipo is null) and asigna_eq <> 'C'"
 
         try:
-            print("Filtrando capa en disco con ArcPy para cultivos y artificiales...")
+            print(f"Filtrando capa en disco con ArcPy para el grupo {self.grupo}...")
             ruta_entrada = os.path.join(self.path_gdb_vectorial, self.capa_objetivo)
 
-            self.cbp_sel_fc = os.path.join(self.gdb_temporal, f"temp_sel_art_{self.zona}")
+            self.cbp_sel_fc = os.path.join(self.gdb_temporal, f"temp_sel_{self.grupo}_{self.zona}")
 
             if arcpy.Exists(self.cbp_sel_fc):
                 arcpy.management.Delete(self.cbp_sel_fc)
@@ -99,7 +103,7 @@ class cruce:
 
             print("Cargando la selección optimizada en GeoPandas...")
             # FIX: Corregido self.gdb_temporal y el nombre dinámico de la capa
-            self.cbp_sel = gpd.read_file(self.gdb_temporal, layer=f"temp_sel_art_{self.zona}")
+            self.cbp_sel = gpd.read_file(self.gdb_temporal, layer=f"temp_sel_{self.grupo}_{self.zona}")
 
             self.cbp_sel['a_cnh24'] = self.cbp_sel.geometry.area
             print(f'✅ Tras la selección quedan {len(self.cbp_sel)} registros cargados de forma segura.')
@@ -272,7 +276,7 @@ class cruce:
         elif self.filtro_zona == '_C_':
             self.dataset = 'wgs84'
 
-        self.gdb_folder = 'Cruce_CBP_LULUCF.gdb'
+        self.gdb_folder = f'Cruce_CBP_LULUCF_{self.grupo}.gdb'
         cbp_lulucf_path = os.path.normpath(os.path.join(self.folder_output, self.gdb_folder))
 
         try:
@@ -326,7 +330,7 @@ class cruce:
 
         df_campos_sel = pd.DataFrame(data, columns=campos_sel)
 
-        self.path_excel = os.path.normpath(os.path.join(self.folder_output, f'cbp_lulucf_{self.zona}_art_y_cult.csv'))
+        self.path_excel = os.path.normpath(os.path.join(self.folder_output, f'cbp_lulucf_{self.zona}_{self.grupo}.csv'))
 
         df_campos_sel.to_csv(self.path_excel, index=False, sep=';', encoding='utf-8-sig')
         print(f"✅ Tabla extraída correctamente en formato CSV: {self.path_excel} ({len(df_campos_sel)} registros)")
@@ -346,8 +350,9 @@ def procesar_zona(tarea, path_gdb_vectorial, path_lulucf, folder_output, filtro=
                          path_lulucf=path_lulucf,
                          folder_output=folder_output)
     objeto_cruce.zona = tarea['zona']
+    objeto_cruce.grupo = tarea['grupo']
 
-    print(f"\n{'=' * 22}\nINICIANDO TAREA: Zona {tarea['zona'].upper()}\n{'=' * 22}")
+    print(f"\n{'=' * 22}\nINICIANDO TAREA: Zona {tarea['zona'].upper()} - Grupo {tarea['grupo']}\n{'=' * 22}")
     ini_tarea = time.time()
 
     try:
@@ -360,10 +365,10 @@ def procesar_zona(tarea, path_gdb_vectorial, path_lulucf, folder_output, filtro=
             objeto_cruce.filtro_lulucf()
 
         if objeto_cruce.lulucf_filtrado:
-            objeto_cruce.identity_area(capa=f'CBP_LULUCF_{tarea["zona"].upper()}_art_y_cult_CON_FILTRO',
+            objeto_cruce.identity_area(capa=f'CBP_LULUCF_{tarea["zona"].upper()}_{tarea["grupo"]}_CON_FILTRO',
                                        sobrescribir='S')
         else:
-            objeto_cruce.identity_area(capa=f'CBP_LULUCF_{tarea["zona"].upper()}_art_y_cult_SIN_FILTRO',
+            objeto_cruce.identity_area(capa=f'CBP_LULUCF_{tarea["zona"].upper()}_{tarea["grupo"]}_SIN_FILTRO',
                                        sobrescribir='S')
 
         objeto_cruce.extraccion_tabla()
@@ -389,8 +394,10 @@ if __name__ == "__main__":
     folder_output = input(r"3. Ruta de la carpeta de salida: ").strip('\'"')
 
     tareas = [
-        {'zona': 'c', 'filtro': False},
-        {'zona': 'pb', 'filtro': False},
+        {'zona': 'c', 'filtro': False, 'grupo': '7s'},
+        {'zona': 'c', 'filtro': False, 'grupo': '8s'},
+        {'zona': 'pb', 'filtro': False, 'grupo': '7s'},
+        {'zona': 'pb', 'filtro': False, 'grupo': '8s'},
     ]
 
     for tarea in tareas:
@@ -399,6 +406,6 @@ if __name__ == "__main__":
     fin_global = time.time()
     print(f"\n🏁 Todo el proceso finalizado en {(fin_global - ini_global) :.2f} segundos.")
 
-# C:\Users\ihormigo\Desktop\resultados_cruce\0 datos originales\preCNH24v1_int_AAF_20260731.gdb
-# C:\Users\ihormigo\Desktop\resultados_cruce\0 datos originales\Serie20240920.gdb
-# C:\Users\ihormigo\Desktop\PRUEBAS\Procesado_geoespacial
+# C:\Users\ihormigo\Desktop\Cruce_preCNH24_LULUCF\1_datos originales\preCNH24_int_AAF_20260828.gdb
+# C:\Users\ihormigo\Desktop\Cruce_preCNH24_LULUCF\1_datos originales\Serie20240920.gdb
+# C:\Users\ihormigo\Desktop\Cruce_separacion_Vs_Js\Procesado_espacial
