@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 import sys
+import glob
 
 # -----------------------------------------------------------------------------
 # 1. PASARELA DICCIONARIO (Cargada directamente en código)
@@ -335,44 +336,90 @@ class metodologia_2a_parte:
 # BLOQUE PRINCIPAL DE EJECUCIÓN
 # =============================================================================
 if __name__ == "__main__":
-    output_folder = r"C:\Users\ihormigo\Desktop\resultados_cruce\3 Resultados Atlas y 2a parte metod\2 Resultados a procesar\2a parte metodologia (binomios 1_1)\2a parte metodologia\PB mejora detalle 1_1"
-    archivo_entrada = r"C:\Users\ihormigo\Desktop\resultados_cruce\3 Resultados Atlas y 2a parte metod\2 Resultados a procesar\2a parte metodologia (binomios 1_1)\Datos 1a parte\PB_caso3_no_muestreado_2a_parte.xlsx"
+    print("=== PROCESAMIENTO BATCH RECURSIVO (2ª PARTE) ===")
 
-    nombre_archivo = os.path.basename(archivo_entrada)
+    # 1. Pedimos la carpeta raíz de entrada (ej: datos_entrada_2a_parte)
+    input_folder_raiz = input("Introduce la ruta de la carpeta raíz de entrada (datos_entrada_2a_parte):\n> ").strip('\"\'')
+    input_folder_raiz = os.path.normpath(input_folder_raiz)
 
-    if "PB" in nombre_archivo:
-        zona_codigo = "PB"
-    elif "C" in nombre_archivo:
-        zona_codigo = "C"
-    else:
-        sys.exit("❌ Error: No se encontró ni 'PB' ni 'C' en el nombre del archivo de entrada.")
+    if not os.path.isdir(input_folder_raiz):
+        sys.exit(f"❌ Error: La carpeta de entrada no existe: {input_folder_raiz}")
 
-    ZONA = f"ZONA_{zona_codigo}"
+    # Derivamos el directorio padre (ej: 2a_parte) donde están o se crearán '7s' y '8s'
+    directorio_padre = os.path.dirname(input_folder_raiz)
 
-    archivo_salida_final = os.path.normpath(
-        os.path.join(output_folder, f"{zona_codigo}_caso3_no_muestreado_2a_parte_MAPEADO_tipestr.xlsx")
-    )
+    # 2. Búsqueda RECURSIVA de todos los archivos .csv en todas las subcarpetas
+    archivos_csv = glob.glob(os.path.join(input_folder_raiz, "**", "*.csv"), recursive=True)
 
-    print(f"Cargando archivo: {nombre_archivo}...")
-    print(f"Zona: {ZONA}")
-    df_origen = pd.read_excel(archivo_entrada)
+    if not archivos_csv:
+        sys.exit(f"❌ Error: No se encontraron archivos CSV de forma recursiva en: {input_folder_raiz}")
 
-    # Instanciación de la clase
-    procesador = metodologia_2a_parte(df_origen)
+    # 3. Bucle para procesar cada archivo detectado automáticamente
+    for archivo_entrada in archivos_csv:
+        nombre_archivo = os.path.basename(archivo_entrada)
+        nombre_lower = nombre_archivo.lower()
+        ruta_relativa = os.path.relpath(archivo_entrada, input_folder_raiz)
 
-    # Flujo de trabajo secuencial
-    procesador.aplicar_pasarela_df(PASARELA_TIPESTR)
-    procesador.eliminar_duplicados_binomios(ZONA, output_folder)
+        # A. Detección automática del grupo (7s u 8s)
+        if "8s" in ruta_relativa.lower() or "8s" in nombre_lower:
+            grupo_actual = "8s"
+        else:
+            grupo_actual = "7s"
 
-    # Guardar Excel procesado completo
-    print(f"\nGuardando Excel resultado final en: {archivo_salida_final}...")
-    procesador.df.to_excel(archivo_salida_final, index=False)
-    print("¡Proceso de guardado finalizado con éxito!")
+        # B. Detección de zona (PB o C)
+        if "pb" in nombre_lower:
+            zona_codigo = "PB"
+        elif "c" in nombre_lower:
+            zona_codigo = "C"
+        else:
+            print(f"⚠️ Omitiendo '{nombre_archivo}': No se encontró ni 'PB' ni 'C' en el nombre.")
+            continue
 
-    # Separar en CSVs (actualiza self.df al grupo 1:1)
-    procesador.separar_registros_por_binomios(ZONA, output_folder)
+        ZONA = f"ZONA_{zona_codigo}"
 
-    # Evaluar mejora de detalle sobre los casos 1:1
-    procesador.evaluar_mejora_detalle_1_1(ZONA, output_folder)
+        # C. Evitar duplicar 7s/7s u 8s/8s limpiando la ruta relativa si empieza por el grupo
+        partes_ruta = ruta_relativa.split(os.sep)
+        if partes_ruta[0].lower() in ['7s', '8s']:
+            subpath_relativo = os.path.join(*partes_ruta[1:-1]) if len(partes_ruta) > 2 else ("" if len(partes_ruta) == 2 else partes_ruta[1])
+        else:
+            subpath_relativo = os.path.dirname(ruta_relativa)
 
-    print("¡Flujo completo finalizado!")
+        # Construcción limpia de la carpeta de salida específica
+        output_folder_especifica = os.path.join(directorio_padre, grupo_actual, subpath_relativo)
+        output_folder_especifica = os.path.normpath(output_folder_especifica)
+        os.makedirs(output_folder_especifica, exist_ok=True)
+
+        archivo_salida_final = os.path.normpath(
+            os.path.join(output_folder_especifica, f"{zona_codigo}_caso3_no_muestreado_2a_parte_MAPEADO_tipestr.xlsx")
+        )
+
+        print("\n" + "=" * 80)
+        print(f"🚀 PROCESANDO | Grupo: {grupo_actual} | Zona: {ZONA}")
+        print(f"📄 Archivo: {nombre_archivo}")
+        print(f"📂 Destino: {output_folder_especifica}")
+        print("=" * 80)
+
+        # Leemos CSV de entrada
+        df_origen = pd.read_csv(archivo_entrada, sep=';', encoding='utf-8-sig')
+
+        # Instanciación de la clase
+        procesador = metodologia_2a_parte(df_origen)
+
+        # Flujo de trabajo secuencial
+        procesador.aplicar_pasarela_df(PASARELA_TIPESTR)
+        procesador.eliminar_duplicados_binomios(ZONA, output_folder_especifica)
+
+        # Guardar Excel procesado completo
+        print(f"\nGuardando Excel resultado final en: {archivo_salida_final}...")
+        procesador.df.to_excel(archivo_salida_final, index=False)
+        print("¡Proceso de guardado finalizado con éxito!")
+
+        # Separar en CSVs (actualiza self.df al grupo 1:1)
+        procesador.separar_registros_por_binomios(ZONA, output_folder_especifica)
+
+        # Evaluar mejora de detalle sobre los casos 1:1
+        procesador.evaluar_mejora_detalle_1_1(ZONA, output_folder_especifica)
+
+        print(f"✅ ¡Flujo completo finalizado para {nombre_archivo}!")
+
+    print("\n🎉 ¡EL PROCESO BATCH RECURSIVO COMPLETO HA FINALIZADO!")
