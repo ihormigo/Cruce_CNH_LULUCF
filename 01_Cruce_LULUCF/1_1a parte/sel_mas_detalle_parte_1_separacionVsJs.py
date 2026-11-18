@@ -42,7 +42,17 @@ class mejora_nivel_detalle:
         self.mapa_lpeh_gridcodes = None
         self.continuar_SIN_asigna1_5_2aabb = None
 
+        # Detección del grupo (7s u 8s) a partir del nombre del archivo de entrada
+        nombre_input = os.path.basename(self.ruta_input).lower()
+        if '7s' in nombre_input:
+            self.grupo = '7s'
+        elif '8s' in nombre_input:
+            self.grupo = '8s'
+        else:
+            self.grupo = '8s'
+
         os.makedirs(self.folder_output, exist_ok=True)
+
 
     def cargar_vectorial(self):
         walker = arcpy.da.Walk(self.path_gdb_vectorial, datatype="FeatureClass", type='Polygon')
@@ -65,19 +75,23 @@ class mejora_nivel_detalle:
         # 1. Por seguridad, forzamos la sobrescritura en ArcPy
         arcpy.env.overwriteOutput = True
 
-        seleccion = [71, 72, 75, 76, 77, 8, 811, 812, 82, 83, 84, 85, 861, 862, 863, 864, 865, 87, 88, 89]
+        if self.grupo == '7s':
+            seleccion = [7 ,71, 72, 75, 76, 77]
+        else:  # self.grupo == '8s'
+            seleccion = [8, 811, 812, 82, 83, 84, 85, 861, 862, 863, 864, 865, 87, 88, 89]
+
         lista_ids = ", ".join(map(str, seleccion))
         where_clause = (f"id_tipestr IN ({lista_ids}) AND id_gh IS NULL AND identico_mfeff = 'ESI_TSI' and "
                         f"(obs_tipo not like '%56%' or obs_tipo is null) and asigna_eq <> 'C'")
 
         try:
-            print("Filtrando capa en disco con ArcPy para cultivos y artificiales...")
+            print(f"Filtrando capa en disco con ArcPy para el grupo {self.grupo}...")
             ruta_entrada = os.path.join(self.path_gdb_vectorial, self.capa_objetivo)
 
             gdb_temporal = arcpy.env.scratchGDB
 
             # 2. Creamos un nombre único basado en el momento exacto para evitar conflictos de .locks
-            nombre_capa_temp = f"temp_sel_{int(time.time())}"
+            nombre_capa_temp = f"temp_sel_{self.grupo}_{int(time.time())}"
             self.cbp_sel_fc = os.path.join(gdb_temporal, nombre_capa_temp)
 
             # ArcPy filtra en disco de forma ultra rápida
@@ -142,7 +156,7 @@ class mejora_nivel_detalle:
         self.df_mapeado = df_agrupado[['id_cnhv2', 'LPEH', 'PER_LPEH', 'PER_R']]
 
         path_excel2 = os.path.normpath(
-            os.path.join(self.folder_output, f'cbp_lulucf_mapeado_{self.zona}_art_y_cult.xlsx'))
+            os.path.join(self.folder_output, f'cbp_lulucf_mapeado_{self.zona}_{self.grupo}.xlsx'))
         self.df_mapeado.to_excel(path_excel2, index=False, sheet_name='resultados')
 
     def redondeo_mapeo(self):
@@ -193,20 +207,16 @@ class mejora_nivel_detalle:
         self.df_pivotado = self.df_pivotado.drop_duplicates(subset=['id_cnhv2'])
 
         path_excel_pivot = os.path.normpath(
-            os.path.join(self.folder_output, f'cbp_lulucf_final_{self.zona}_todos_pivotado.xlsx'))
+            os.path.join(self.folder_output, f'cbp_lulucf_final_{self.zona}_{self.grupo}_pivotado.xlsx'))
         self.df_pivotado.to_excel(path_excel_pivot, index=False, sheet_name="resultados_pivot")
-        # HASTA AQUI BIEN
 
     def union_tablas(self):
-        # 1. Buscar la capa dentro de los datasets de la GDB usando el filtro de zona
-        ruta_fc = None
-        for root, _, filenames in arcpy.da.Walk(self.path_gdb_vectorial, datatype="FeatureClass"):
-            for fc in filenames:
-                if self.filtro_zona in fc:
-                    ruta_fc = os.path.join(root, fc)
-                    break
-            if ruta_fc:
-                break
+        # 1. Usar directamente la capa temporal filtrada en sel_vectorial()
+        ruta_fc = self.cbp_sel_fc
+
+        if not ruta_fc or not arcpy.Exists(ruta_fc):
+            print("❌ Error: No se encontró la capa filtrada en memoria/disco.")
+            sys.exit()
 
         # 2. Extraer la tabla de atributos omitiendo la geometría (rápido y directo)
         campos = [f.name for f in arcpy.ListFields(ruta_fc) if f.type != 'Geometry']
@@ -221,10 +231,7 @@ class mejora_nivel_detalle:
         self.tablas_unidas = pd.merge(self.df_pivotado, df_gdb, on='id_cnhv2', how='left')
 
         # 5. Separar los registros según el campo 'asigna_lpeh1'
-        # Pasamos a texto y quitamos posibles espacios fantasma
         asigna_str = self.tablas_unidas['asigna_lpeh1'].astype(str).str.strip()
-
-        # Filtro: Que contenga '5' (5, 5a, 5b) O que sea exactamente '2aa' o '2bb'
         mask_descartes = asigna_str.str.contains('5', na=False) | asigna_str.isin(['2aa', '2bb'])
 
         descartes_filtros = self.tablas_unidas[mask_descartes]
@@ -242,17 +249,18 @@ class mejora_nivel_detalle:
         print(f" - Continuar depuración: {filas_continuar} registros")
         print("=" * 60 + "\n")
 
-        # 6. Exportar los dos archivos de salida específicos a CSV
-        path_descartes = os.path.join(self.folder_output,
-                                      f'revisar_descartes_filtros_asigna1_{self.zona}_art_y_cult.csv')
-        path_continuar = os.path.join(self.folder_output, f'continuar_dep_filtros_asigna1_{self.zona}_art_y_cult.csv')
+        # 6. Exportar los dos archivos de salida específicos a CSV (incluyendo grupo 7s/8s en el nombre)
+        path_descartes = os.path.join(self.folder_output, f'revisar_descartes_filtros_asigna1_{self.zona}_{self.grupo}.csv')
+        path_continuar = os.path.join(self.folder_output, f'continuar_dep_filtros_asigna1_{self.zona}_{self.grupo}.csv')
 
         descartes_filtros.to_csv(path_descartes, sep=';', index=False, encoding='utf-8-sig')
         self.continuar_SIN_asigna1_5_2aabb.to_csv(path_continuar, sep=';', index=False, encoding='utf-8-sig')
 
+
     def eliminacion_duplicados_lpehx_LPEHX_px_PERX(self):
         print("Filtrando y exportando registros duplicados (coincidencia total)...")
 
+        # AQUÍ USAMOS EL DF FILTRADO (SIN LOS DESCARTES DE LA ETAPA ANTERIOR)
         df = self.continuar_SIN_asigna1_5_2aabb.copy()
 
         # Identificar dinámicamente todos los índices numéricos de posición (1, 2, 3...)
@@ -291,85 +299,89 @@ class mejora_nivel_detalle:
 
         # Separación final de los DataFrames
         duplicados_lpehx_LPEHX = df[es_duplicado_fila]
-        self.NO_duplicados_continuar_depuracion_lpehx_LPEHX = df[~es_duplicado_fila]
+        self.NO_duplicados_continuar_depuracion_lpehx_LPEHX_px_PERX = df[~es_duplicado_fila]
 
         # Definición de las rutas de salida con los nombres exactos solicitados
         path_duplicados = os.path.join(self.folder_output,
-                                       f'revision_INTERNA_duplicados_lpehx_LPEHX_px_PERX_{self.zona}_art_y_cult.csv')
+                                       f'revision_INTERNA_duplicados_lpehx_LPEHX_px_PERX_{self.zona}_{self.grupo}.csv')
         path_continuar = os.path.join(self.folder_output,
-                                      f'continuar_SIN_duplicados_lpehx_LPEHX_px_PERX_{self.zona}_art_y_cult.csv')
+                                      f'continuar_SIN_duplicados_lpehx_LPEHX_px_PERX_{self.zona}_{self.grupo}.csv')
 
         # Exportación a archivos CSV respetando el delimitador ';' habitual de tu flujo
         duplicados_lpehx_LPEHX.to_csv(path_duplicados, sep=';', index=False, encoding='utf-8-sig')
-        self.NO_duplicados_continuar_depuracion_lpehx_LPEHX.to_csv(path_continuar, sep=';', index=False,
+        self.NO_duplicados_continuar_depuracion_lpehx_LPEHX_px_PERX.to_csv(path_continuar, sep=';', index=False,
                                                                    encoding='utf-8-sig')
         print(
-            f"✅ Proceso completado. Duplicados extraídos: {len(duplicados_lpehx_LPEHX)} | Registros limpios para continuar: {len(self.NO_duplicados_continuar_depuracion_lpehx_LPEHX)}")
+            f"✅ Proceso completado. Duplicados extraídos: {len(duplicados_lpehx_LPEHX)} | Registros limpios para continuar: {len(self.NO_duplicados_continuar_depuracion_lpehx_LPEHX_px_PERX)}")
+
 
     def clasificacion_para_revision_manual(self):
-        print("\nClasificando registros por presencia de V/J y sumas condicionales...")
+        patron = 'V' if self.grupo == '7s' else 'J'
+        etiqueta_patron = 'Vs' if self.grupo == '7s' else 'Js'
+
+        print(
+            f"\nClasificando registros por presencia de {etiqueta_patron} (Grupo {self.grupo}) y sumas condicionales...")
 
         # Partimos de la capa limpia de duplicados de la función anterior
-        df = self.NO_duplicados_continuar_depuracion_lpehx_LPEHX.copy()
+        df = self.NO_duplicados_continuar_depuracion_lpehx_LPEHX_px_PERX.copy()
         total_inicial = len(df)
 
         # -------------------------------------------------------------------------
-        # 1. SEPARACIÓN PRINCIPAL: LPEH_1 contiene o no V o J
+        # 1. SEPARACIÓN PRINCIPAL: LPEH_1 contiene o no V (si 7s) o J (si 8s)
         # -------------------------------------------------------------------------
-        mask_lpeh1_vj = df['LPEH_1'].str.contains('V|J', case=False, na=False)
+        mask_lpeh1_target = df['LPEH_1'].str.contains(patron, case=False, na=False)
 
-        self.registros_LPEH_1_CON_Vs_Js = df[mask_lpeh1_vj].copy()
-        self.registros_LPEH_1_SIN_Vs_Js = df[~mask_lpeh1_vj].copy()
+        self.registros_LPEH_1_CON_target = df[mask_lpeh1_target].copy()
+        self.registros_LPEH_1_SIN_target = df[~mask_lpeh1_target].copy()
 
         # -------------------------------------------------------------------------
-        # 2. RAMA: LPEH_1 SIN Vs/Js
+        # 2. RAMA: LPEH_1 SIN V/J
         # -------------------------------------------------------------------------
-        df_sin = self.registros_LPEH_1_SIN_Vs_Js.copy()
+        df_sin = self.registros_LPEH_1_SIN_target.copy()
         cols_lpeh_2_plus = [col for col in df_sin.columns if col.startswith('LPEH_') and col != 'LPEH_1']
 
-        # Evaluar si LPEH_2, 3, 4... contienen V o J en alguna de sus columnas
-        mask_any_vj_2_plus = pd.Series(False, index=df_sin.index)
+        # Evaluar si LPEH_2, 3, 4... contienen el patrón
+        mask_any_target_2_plus = pd.Series(False, index=df_sin.index)
         for col in cols_lpeh_2_plus:
-            mask_any_vj_2_plus |= df_sin[col].str.contains('V|J', case=False, na=False)
+            mask_any_target_2_plus |= df_sin[col].str.contains(patron, case=False, na=False)
 
-        self.LPEH_2_X_SI_VJ = df_sin[mask_any_vj_2_plus].copy()
-        self.LPEH_2_X_NO_VJ = df_sin[~mask_any_vj_2_plus].copy()
+        self.LPEH_2_X_SI_target = df_sin[mask_any_target_2_plus].copy()
+        self.LPEH_2_X_NO_target = df_sin[~mask_any_target_2_plus].copy()
 
         # -------------------------------------------------------------------------
-        # 3. RAMA: LPEH_1 CON Vs/Js
+        # 3. RAMA: LPEH_1 CON V/J
         # -------------------------------------------------------------------------
-        df_con = self.registros_LPEH_1_CON_Vs_Js.copy()
+        df_con = self.registros_LPEH_1_CON_target.copy()
         cols_lpeh_todas = [col for col in df_con.columns if col.startswith('LPEH_')]
 
-        suma_per_vj = pd.Series(0.0, index=df_con.index)
+        suma_per_target = pd.Series(0.0, index=df_con.index)
 
-        # Sumar PER_X estrictamente si su respectivo LPEH_X contiene V o J
+        # Sumar PER_X strictly si su respectivo LPEH_X contiene el patrón objetivo
         for col_lpeh in cols_lpeh_todas:
             num = col_lpeh.split('_')[1]
             col_per = f'PER_{num}'
 
             if col_per in df_con.columns:
-                mask_vj_pos = df_con[col_lpeh].str.contains('V|J', case=False, na=False)
+                mask_target_pos = df_con[col_lpeh].str.contains(patron, case=False, na=False)
                 per_num = pd.to_numeric(df_con[col_per], errors='coerce').fillna(0)
-                # .where() de Pandas: si la máscara es True deja el porcentaje, si es False suma 0
-                suma_per_vj += per_num.where(mask_vj_pos, 0)
+                suma_per_target += per_num.where(mask_target_pos, 0)
 
-        # Subdivisión por umbrales (matemáticamente cerrados para no perder decimales)
-        self.suma_PERs_X_CON_Vs_Js_menor_igual_70 = df_con[suma_per_vj <= 70].copy()
-        self.suma_PERs_X_CON_Vs_Js_70_85 = df_con[(suma_per_vj > 70) & (suma_per_vj < 85)].copy()
-        self.suma_PERs_X_CON_Vs_Js_mayor_igual_85 = df_con[suma_per_vj >= 85].copy()
+        # Subdivisión por umbrales
+        self.suma_PERs_X_CON_target_menor_igual_70 = df_con[suma_per_target <= 70].copy()
+        self.suma_PERs_X_CON_target_70_85 = df_con[(suma_per_target > 70) & (suma_per_target < 85)].copy()
+        self.suma_PERs_X_CON_target_mayor_igual_85 = df_con[suma_per_target >= 85].copy()
 
         # -------------------------------------------------------------------------
         # 4. EXPORTACIÓN A CSV
         # -------------------------------------------------------------------------
         archivos_generar = {
-            'registros_LPEH_1_SIN_Vs_Js.csv': self.registros_LPEH_1_SIN_Vs_Js,
-            'registros_LPEH_1_CON_Vs_Js.csv': self.registros_LPEH_1_CON_Vs_Js,
-            f'revision_cruce_LPEH_2_X_SI_VJ_{self.zona}.csv': self.LPEH_2_X_SI_VJ,
-            f'revision_cruce_LPEH_2_X_NO_VJ_{self.zona}.csv': self.LPEH_2_X_NO_VJ,
-            f'revision_cruce_suma_PERs_X_CON_Vs_Js_menor_igual_70_{self.zona}.csv': self.suma_PERs_X_CON_Vs_Js_menor_igual_70,
-            f'revision_cruce_suma_PERs_X_CON_Vs_Js_70_85_{self.zona}.csv': self.suma_PERs_X_CON_Vs_Js_70_85,
-            f'revision_mejorar_detalle_cruce_suma_PERs_X_CON_Vs_Js_mayor_igual_85_{self.zona}.csv': self.suma_PERs_X_CON_Vs_Js_mayor_igual_85
+            f'registros_LPEH_1_SIN_{etiqueta_patron}_{self.zona}_{self.grupo}.csv': self.registros_LPEH_1_SIN_target,
+            f'registros_LPEH_1_CON_{etiqueta_patron}_{self.zona}_{self.grupo}.csv': self.registros_LPEH_1_CON_target,
+            f'revision_cruce_LPEH_2_X_SI_{etiqueta_patron}_{self.zona}_{self.grupo}.csv': self.LPEH_2_X_SI_target,
+            f'revision_cruce_LPEH_2_X_NO_{etiqueta_patron}_{self.zona}_{self.grupo}.csv': self.LPEH_2_X_NO_target,
+            f'revision_cruce_suma_PERs_X_CON_{etiqueta_patron}_menor_igual_70_{self.zona}_{self.grupo}.csv': self.suma_PERs_X_CON_target_menor_igual_70,
+            f'revision_cruce_suma_PERs_X_CON_{etiqueta_patron}_70_85_{self.zona}_{self.grupo}.csv': self.suma_PERs_X_CON_target_70_85,
+            f'revision_mejorar_detalle_cruce_suma_PERs_X_CON_{etiqueta_patron}_mayor_igual_85_{self.zona}_{self.grupo}.csv': self.suma_PERs_X_CON_target_mayor_igual_85
         }
 
         for nombre_csv, df_out in archivos_generar.items():
@@ -379,29 +391,33 @@ class mejora_nivel_detalle:
         # -------------------------------------------------------------------------
         # 5. CONTROL DE BALANCE DE REGISTROS
         # -------------------------------------------------------------------------
-        subtotal_sin = len(self.LPEH_2_X_SI_VJ) + len(self.LPEH_2_X_NO_VJ)
-        subtotal_con = (len(self.suma_PERs_X_CON_Vs_Js_menor_igual_70) +
-                        len(self.suma_PERs_X_CON_Vs_Js_70_85) +
-                        len(self.suma_PERs_X_CON_Vs_Js_mayor_igual_85))
+        subtotal_sin = len(self.LPEH_2_X_SI_target) + len(self.LPEH_2_X_NO_target)
+        subtotal_con = (len(self.suma_PERs_X_CON_target_menor_igual_70) +
+                        len(self.suma_PERs_X_CON_target_70_85) +
+                        len(self.suma_PERs_X_CON_target_mayor_igual_85))
 
         total_salida = subtotal_sin + subtotal_con
 
         print("\n" + "=" * 65)
-        print("         CONTROL DE REGISTROS: CRUCE V/J Y SUMAS")
+        print(f"         CONTROL DE REGISTROS: CRUCE {etiqueta_patron} Y SUMAS ({self.grupo})")
         print("=" * 65)
         print(f"Total inicial de registros a clasificar: {total_inicial}")
-        print(f"  ├── 1. LPEH_1 SIN Vs/Js:                      {len(self.registros_LPEH_1_SIN_Vs_Js)}")
-        print(f"  │     ├── LPEH_2+ CON algún V/J:              {len(self.LPEH_2_X_SI_VJ)}")
-        print(f"  │     └── LPEH_2+ SIN ningún V/J:             {len(self.LPEH_2_X_NO_VJ)}")
+        print(f"  ├── 1. LPEH_1 SIN {etiqueta_patron}:                   {len(self.registros_LPEH_1_SIN_target)}")
+        print(f"  │     ├── LPEH_2+ CON algún {etiqueta_patron}:         {len(self.LPEH_2_X_SI_target)}")
+        print(f"  │     └── LPEH_2+ SIN ningún {etiqueta_patron}:        {len(self.LPEH_2_X_NO_target)}")
         print(f"  │")
-        print(f"  └── 2. LPEH_1 CON Vs/Js:                      {len(self.registros_LPEH_1_CON_Vs_Js)}")
-        print(f"        ├── Suma PER_X (solo V/J) <= 70%:       {len(self.suma_PERs_X_CON_Vs_Js_menor_igual_70)}")
-        print(f"        ├── Suma PER_X (solo V/J) > 70% y < 85%: {len(self.suma_PERs_X_CON_Vs_Js_70_85)}")
-        print(f"        └── Suma PER_X (solo V/J) >= 85%:       {len(self.suma_PERs_X_CON_Vs_Js_mayor_igual_85)}")
+        print(f"  └── 2. LPEH_1 CON {etiqueta_patron}:                   {len(self.registros_LPEH_1_CON_target)}")
+        print(
+            f"        ├── Suma PER_X (solo {etiqueta_patron}) <= 70%:  {len(self.suma_PERs_X_CON_target_menor_igual_70)}")
+        print(
+            f"        ├── Suma PER_X (solo {etiqueta_patron}) > 70% y < 85%: {len(self.suma_PERs_X_CON_target_70_85)}")
+        print(
+            f"        └── Suma PER_X (solo {etiqueta_patron}) >= 85%:  {len(self.suma_PERs_X_CON_target_mayor_igual_85)}")
         print("-" * 65)
         print(f"  Subtotal Rama SIN: {subtotal_sin} | Subtotal Rama CON: {subtotal_con}")
         print(f"  Total sumando las 5 ramas finales:            {total_salida}")
-        print(f"  CUADRE PERFECTO (Entrada == Salida):          {'✅ SÍ' if total_inicial == total_salida else '❌ NO'}")
+        print(
+            f"  CUADRE PERFECTO (Entrada == Salida):          {'✅ SÍ' if total_inicial == total_salida else '❌ NO'}")
         print("=" * 65 + "\n")
 
 
@@ -482,9 +498,3 @@ if __name__ == "__main__":
     tiempo_total = fin-ini
     print(f"⏱️ El proceso ha tardado: {tiempo_total:.2f} segundos")
     print("="*50)
-
-    # C:\Users\ihormigo\Desktop\resultados_cruce\2_Resultado_procesado_geoespacial
-    # C:\Users\ihormigo\Desktop\resultados_cruce\1_datos originales\preCNH24v1_int_AAF_20260731.gdb
-    # C:\Users\ihormigo\Desktop
-
-
