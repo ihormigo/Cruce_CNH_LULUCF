@@ -3,6 +3,7 @@ import pandas as pd
 import sys
 import glob
 
+
 # -----------------------------------------------------------------------------
 # 1. PASARELA DICCIONARIO (Cargada directamente en código)
 # -----------------------------------------------------------------------------
@@ -21,6 +22,7 @@ PASARELA_TIPESTR = {
     85: [('J', 100)],
     87: [('J', 100)],
     88: [('J', 80), ('T', 20)],
+    89: [('J', 51), ('V', 49)],
     811: [('J1', 100)],
     812: [('J2', 100)],
     861: [('J4', 100)],
@@ -42,14 +44,21 @@ class metodologia_2a_parte:
     # FUNCIÓN 1: Procesamiento individual de una fila
     # =========================================================================
     def procesar_fila_pasarela(self, row, pasarela_dict):
-        """
-        Procesa una fila individual:
-        1. Identifica coberturas 'V' y 'J' directas y acumula el % restante (No-V/J).
-        2. Transforma el % No-V/J aplicando la pasarela según la columna 'tipestr'.
-        3. Fusiona y suma porcentajes si coinciden códigos tras la pasarela.
-        """
         conteo_lpeh = {}
         total_no_v_j = 0.0
+
+        if "id_tipestr" not in row:
+            sys.exit("El campo 'id_tipestr' no existe.")
+
+        tipestr_val = row.get("id_tipestr")
+        tipestr_key = tipestr_val
+        if pd.notna(tipestr_val):
+            try:
+                tipestr_key = int(float(tipestr_val))
+            except (ValueError, TypeError):
+                tipestr_key = tipestr_val
+
+        tiene_pasarela = tipestr_key in pasarela_dict
 
         for i in range(1, 11):
             col_lpeh = f"LPEH_{i}"
@@ -71,31 +80,22 @@ class metodologia_2a_parte:
                 continue
 
             if "V" in val_lpeh or "J" in val_lpeh:
-                conteo_lpeh[val_lpeh] = val_per
+                conteo_lpeh[val_lpeh] = conteo_lpeh.get(val_lpeh, 0.0) + val_per
             else:
-                total_no_v_j += val_per
+                if tiene_pasarela:
+                    total_no_v_j += val_per
+                else:
+                    # Mantiene la cobertura secundaria si el tipestr no requiere pasarela
+                    conteo_lpeh[val_lpeh] = conteo_lpeh.get(val_lpeh, 0.0) + val_per
 
-        if "id_tipestr" not in row:
-            sys.exit("El campo 'id_tipestr' no existe.")
+        if tiene_pasarela and total_no_v_j > 0:
+            reglas_reparto = pasarela_dict[tipestr_key]
 
-        if total_no_v_j > 0:
-            tipestr_val = row.get("id_tipestr")
-
-            if pd.notna(tipestr_val):
-                try:
-                    tipestr_key = int(float(tipestr_val))
-                except (ValueError, TypeError):
-                    tipestr_key = tipestr_val
-
-                if tipestr_key in pasarela_dict:
-                    reglas_reparto = pasarela_dict[tipestr_key]
-
-                    for cod_destino, proporcion in reglas_reparto:
-                        porcentaje_ajustado = total_no_v_j * (proporcion / 100)
-                        conteo_lpeh[cod_destino] = conteo_lpeh.get(cod_destino, 0.0) + porcentaje_ajustado
+            for cod_destino, proporcion in reglas_reparto:
+                porcentaje_ajustado = total_no_v_j * (proporcion / 100)
+                conteo_lpeh[cod_destino] = conteo_lpeh.get(cod_destino, 0.0) + porcentaje_ajustado
 
         return conteo_lpeh
-
     # =========================================================================
     # FUNCIÓN 2: Aplicación sobre DataFrame
     # =========================================================================
@@ -390,7 +390,7 @@ if __name__ == "__main__":
         os.makedirs(output_folder_especifica, exist_ok=True)
 
         archivo_salida_final = os.path.normpath(
-            os.path.join(output_folder_especifica, f"{zona_codigo}_caso3_no_muestreado_2a_parte_MAPEADO_tipestr.xlsx")
+            os.path.join(output_folder_especifica, f"{zona_codigo}_caso3_no_muestreado_2a_parte_MAPEADO_tipestr.csv")
         )
 
         print("\n" + "=" * 80)
@@ -410,8 +410,8 @@ if __name__ == "__main__":
         procesador.eliminar_duplicados_binomios(ZONA, output_folder_especifica)
 
         # Guardar Excel procesado completo
-        print(f"\nGuardando Excel resultado final en: {archivo_salida_final}...")
-        procesador.df.to_excel(archivo_salida_final, index=False)
+        print(f"\nGuardando CSV resultado final en: {archivo_salida_final}...")
+        procesador.df.to_csv(archivo_salida_final, index=False, sep=';', encoding='utf-8-sig')
         print("¡Proceso de guardado finalizado con éxito!")
 
         # Separar en CSVs (actualiza self.df al grupo 1:1)
