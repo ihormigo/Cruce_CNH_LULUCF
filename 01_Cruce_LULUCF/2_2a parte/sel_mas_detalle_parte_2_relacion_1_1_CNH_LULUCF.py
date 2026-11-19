@@ -1,7 +1,7 @@
 import os
+import glob
 import pandas as pd
 import sys
-import glob
 
 
 # -----------------------------------------------------------------------------
@@ -13,7 +13,7 @@ PASARELA_TIPESTR = {
     73: [('R', 100)],
     74: [('V63', 50), ('R', 50)],
     75: [('V', 50), ('J', 50)],
-    76: [('V', 80), ('T',20)], # Mosaico de cultivo con arbolado (FccArb <20%)
+    76: [('V', 80), ('T', 20)],  # Mosaico de cultivo con arbolado (FccArb <20%)
     77: [('V', 50), ('R', 25), ('S', 25)],
     8: [('J', 100)],
     82: [('J', 100)],
@@ -58,7 +58,23 @@ class metodologia_2a_parte:
             except (ValueError, TypeError):
                 tipestr_key = tipestr_val
 
-        tiene_pasarela = tipestr_key in pasarela_dict
+        # Comprobar si la fila ya contiene alguna cobertura válida con 'V' o 'J'
+        tiene_v_o_j = False
+        for i in range(1, 11):
+            val_lpeh_check = row.get(f"LPEH_{i}")
+            val_per_check = row.get(f"PER_{i}")
+            if pd.notna(val_lpeh_check) and pd.notna(val_per_check):
+                cod_check = str(val_lpeh_check).strip()
+                try:
+                    per_check = float(val_per_check)
+                except (ValueError, TypeError):
+                    per_check = 0.0
+                if per_check > 0 and ("V" in cod_check or "J" in cod_check):
+                    tiene_v_o_j = True
+                    break
+
+        # Solo aplicar pasarela si el tipestr está en el diccionario Y NO hay 'V' ni 'J' en la fila
+        aplicar_pasarela = (tipestr_key in pasarela_dict) and (not tiene_v_o_j)
 
         for i in range(1, 11):
             col_lpeh = f"LPEH_{i}"
@@ -82,13 +98,13 @@ class metodologia_2a_parte:
             if "V" in val_lpeh or "J" in val_lpeh:
                 conteo_lpeh[val_lpeh] = conteo_lpeh.get(val_lpeh, 0.0) + val_per
             else:
-                if tiene_pasarela:
+                if aplicar_pasarela:
                     total_no_v_j += val_per
                 else:
-                    # Mantiene la cobertura secundaria si el tipestr no requiere pasarela
+                    # Mantiene la cobertura secundaria si hay V/J en la fila o si el tipestr no tiene pasarela
                     conteo_lpeh[val_lpeh] = conteo_lpeh.get(val_lpeh, 0.0) + val_per
 
-        if tiene_pasarela and total_no_v_j > 0:
+        if aplicar_pasarela and total_no_v_j > 0:
             reglas_reparto = pasarela_dict[tipestr_key]
 
             for cod_destino, proporcion in reglas_reparto:
@@ -96,6 +112,7 @@ class metodologia_2a_parte:
                 conteo_lpeh[cod_destino] = conteo_lpeh.get(cod_destino, 0.0) + porcentaje_ajustado
 
         return conteo_lpeh
+
     # =========================================================================
     # FUNCIÓN 2: Aplicación sobre DataFrame
     # =========================================================================
@@ -142,7 +159,7 @@ class metodologia_2a_parte:
     # =========================================================================
     # FUNCIÓN 3: Eliminación de filas donde Origen == Destino
     # =========================================================================
-    def eliminar_duplicados_binomios(self, zona, output_folder):
+    def eliminar_duplicados_binomios(self, prefijo_salida, output_folder):
         """
         Compara para cada fila si origen y destino son exactamente iguales.
         """
@@ -183,7 +200,7 @@ class metodologia_2a_parte:
         df_duplicados = self.df.loc[indices_duplicados].copy()
 
         if not df_duplicados.empty:
-            path_duplicados = os.path.join(output_folder, f'REVISION_duplicados_lpehx_LPEH_X_{zona}.csv')
+            path_duplicados = os.path.join(output_folder, f'{prefijo_salida}_REVISION_duplicados_lpehx_LPEH_X.csv')
             df_duplicados.to_csv(path_duplicados, index=False, sep=';', encoding='utf-8-sig')
             print(f"  -> 📄 Archivo de revisión guardado en:\n     {path_duplicados}")
         else:
@@ -201,7 +218,7 @@ class metodologia_2a_parte:
     # =========================================================================
     # FUNCIÓN 4: Separación de casos por número de columnas lpehx-LPEH_X
     # =========================================================================
-    def separar_registros_por_binomios(self, zona, output_folder):
+    def separar_registros_por_binomios(self, prefijo_salida, output_folder):
         """
         Separa en 3 CSVs (1:1, 1:N, N:M) y actualiza self.df únicamente con los registros 1:1.
         """
@@ -230,9 +247,9 @@ class metodologia_2a_parte:
         df_solo_lpeh1_LPEH_1 = df_1_lpeh[cond_resto_LPEH_nulo].copy()
         df_solo_lpeh1_varios_LPEH = df_1_lpeh[~cond_resto_LPEH_nulo].copy()
 
-        path_caso1 = os.path.join(output_folder, f'registros_lpeh1_LPEH_1_{zona}.csv')
-        path_caso2 = os.path.join(output_folder, f'registros_lpeh1_varios_LPEH_X_{zona}.csv')
-        path_caso3 = os.path.join(output_folder, f'registros_varios_binomios_lpehx_{zona}.csv')
+        path_caso1 = os.path.join(output_folder, f'{prefijo_salida}_registros_lpeh1_LPEH_1.csv')
+        path_caso2 = os.path.join(output_folder, f'{prefijo_salida}_registros_lpeh1_varios_LPEH_X.csv')
+        path_caso3 = os.path.join(output_folder, f'{prefijo_salida}_registros_varios_binomios_lpehx.csv')
 
         df_solo_lpeh1_LPEH_1.to_csv(path_caso1, index=False, sep=';', encoding='utf-8-sig')
         df_solo_lpeh1_varios_LPEH.to_csv(path_caso2, index=False, sep=';', encoding='utf-8-sig')
@@ -261,14 +278,14 @@ class metodologia_2a_parte:
         self.df = df_solo_lpeh1_LPEH_1
         return self.df
 
-# =========================================================================
+    # =========================================================================
     # FUNCIÓN 5: Comparación de detalle en casos 1:1 (lpeh1 vs LPEH_1)
     # =========================================================================
-    def evaluar_mejora_detalle_1_1(self, zona, output_folder):
+    def evaluar_mejora_detalle_1_1(self, prefijo_salida, output_folder):
         """
-        Filtra y separa los registros 1:1 en dos CSVs:
-        1. Mejora de detalle: LPEH_1 ofrece mayor longitud que lpeh1.
-        2. Sin mejora (revisión): LPEH_1 tiene igual o menor longitud que lpeh1.
+        Filtra y separa los registros 1:1 en CSVs según longitud y prefijo (startswith):
+        1. Mejora de detalle (mismo prefijo vs distinto prefijo).
+        2. Sin mejora (revisión).
         Limpia puntos y cuenta 'ES' como un único carácter antes de medir.
         """
         print('Iniciando evaluación de mejora de detalle en registros 1:1 (lpeh1 vs LPEH_1)...')
@@ -280,26 +297,25 @@ class metodologia_2a_parte:
         def _longitud_codigo(val):
             if pd.isna(val):
                 return 0
-            # 1. Quitar puntos y espacios
             s = str(val).strip().replace('.', '')
-            # 2. Contar 'ES' como 1 solo carácter
             s = s.replace('ES', 'X')
             return len(s)
 
         len_origen = self.df['lpeh1'].apply(_longitud_codigo)
         len_destino = self.df['LPEH_1'].apply(_longitud_codigo)
 
-        # Máscaras de filtrado
         mascara_mejora = len_destino > len_origen
 
         df_mejora = self.df[mascara_mejora].copy()
         df_sin_mejora = self.df[~mascara_mejora].copy()
 
-        # Bifurcación: Mismo prefijo vs Distinto prefijo
+        # Bifurcación estricta por prefijo (ej: V vs V1, J1 vs J123) usando startswith
         def _es_mismo_prefijo(row):
             orig = str(row['lpeh1']).strip().replace('.', '')
             dest = str(row['LPEH_1']).strip().replace('.', '')
-            return orig in dest
+            if not orig or not dest:
+                return False
+            return dest.startswith(orig)
 
         if not df_mejora.empty:
             mascara_mismo_prefijo = df_mejora.apply(_es_mismo_prefijo, axis=1)
@@ -309,21 +325,21 @@ class metodologia_2a_parte:
             df_mismo_prefijo = pd.DataFrame(columns=self.df.columns)
             df_distinto_prefijo = pd.DataFrame(columns=self.df.columns)
 
-        # Guardar CSVs con mejora
-        path_mejora_mismo = os.path.join(output_folder, f'mejora_detalle_LPEH_1_lpeh1_{zona}_mismo_prefijo.csv')
+        path_mejora_mismo = os.path.join(output_folder, f'{prefijo_salida}_mejora_detalle_LPEH_1_lpeh1_mismo_prefijo.csv')
         df_mismo_prefijo.to_csv(path_mejora_mismo, index=False, sep=';', encoding='utf-8-sig')
 
-        path_mejora_distinto = os.path.join(output_folder,
-                                            f'revision_mejora_detalle_LPEH_1_lpeh1_{zona}_distinto_prefijo.csv')
+        path_mejora_distinto = os.path.join(
+            output_folder,
+            f'{prefijo_salida}_revision_mejora_detalle_LPEH_1_lpeh1_distinto_prefijo.csv'
+        )
         df_distinto_prefijo.to_csv(path_mejora_distinto, index=False, sep=';', encoding='utf-8-sig')
 
-        # Guardar CSVs sin mejora
-        path_sin_mejora = os.path.join(output_folder, f'revision_detalle_lpeh1_LPEH_1_{zona}.csv')
+        path_sin_mejora = os.path.join(output_folder, f'{prefijo_salida}_revision_detalle_lpeh1_LPEH_1.csv')
         df_sin_mejora.to_csv(path_sin_mejora, index=False, sep=';', encoding='utf-8-sig')
 
         print(f'  -> Registros 1:1 evaluados: {len(self.df)}')
         print(f'  -> Registros con mejora (LPEH_1 > lpeh1): {len(df_mejora)}')
-        print(f'     ├── Mismo prefijo (lpeh1 contenido en LPEH_1): {len(df_mismo_prefijo)}')
+        print(f'     ├── Mismo prefijo (LPEH_1 empieza por lpeh1): {len(df_mismo_prefijo)}')
         print(f'     │   📄 Archivo guardado en: {path_mejora_mismo}')
         print(f'     └── Distinto prefijo: {len(df_distinto_prefijo)}')
         print(f'         📄 Archivo guardado en: {path_mejora_distinto}')
@@ -332,94 +348,92 @@ class metodologia_2a_parte:
 
         return df_mejora
 
+
+def _detectar_zona(nombre_archivo):
+    nombre_lower = nombre_archivo.lower()
+    if "_pb_" in nombre_lower or nombre_lower.endswith("_pb.csv"):
+        return "PB"
+    if "_c_" in nombre_lower or nombre_lower.endswith("_c.csv"):
+        return "C"
+    return None
+
+
+def _detectar_grupo(ruta_relativa, nombre_archivo):
+    ruta_lower = ruta_relativa.lower()
+    nombre_lower = nombre_archivo.lower()
+    partes = ruta_lower.split(os.sep)
+    if "8s" in partes or "8s" in nombre_lower:
+        return "8s"
+    return "7s"
+
+
 # =============================================================================
-# BLOQUE PRINCIPAL DE EJECUCIÓN
+# BLOQUE PRINCIPAL DE EJECUCIÓN RECURSIVA (datos_entrada_2a_parte -> ../7s y ../8s)
 # =============================================================================
 if __name__ == "__main__":
-    print("=== PROCESAMIENTO BATCH RECURSIVO (2ª PARTE) ===")
+    print("=== PROCESAMIENTO RECURSIVO (2ª PARTE - PB Y C EN 7s Y 8s) ===")
 
-    # 1. Pedimos la carpeta raíz de entrada (ej: datos_entrada_2a_parte)
     input_folder_raiz = input("Introduce la ruta de la carpeta raíz de entrada (datos_entrada_2a_parte):\n> ").strip('\"\'')
     input_folder_raiz = os.path.normpath(input_folder_raiz)
 
     if not os.path.isdir(input_folder_raiz):
         sys.exit(f"❌ Error: La carpeta de entrada no existe: {input_folder_raiz}")
 
-    # Derivamos el directorio padre (ej: 2a_parte) donde están o se crearán '7s' y '8s'
     directorio_padre = os.path.dirname(input_folder_raiz)
+    todos_csv = glob.glob(os.path.join(input_folder_raiz, "**", "*.csv"), recursive=True)
 
-    # 2. Búsqueda RECURSIVA de todos los archivos .csv en todas las subcarpetas
-    archivos_csv = glob.glob(os.path.join(input_folder_raiz, "**", "*.csv"), recursive=True)
+    archivos_objetivo = [
+        f for f in todos_csv
+        if _detectar_zona(os.path.basename(f)) is not None
+    ]
 
-    if not archivos_csv:
-        sys.exit(f"❌ Error: No se encontraron archivos CSV de forma recursiva en: {input_folder_raiz}")
+    if not archivos_objetivo:
+        sys.exit(f"❌ Error: No se encontraron archivos CSV de PB o C en: {input_folder_raiz}")
 
-    # 3. Bucle para procesar cada archivo detectado automáticamente
-    for archivo_entrada in archivos_csv:
+    for archivo_entrada in sorted(archivos_objetivo):
         nombre_archivo = os.path.basename(archivo_entrada)
-        nombre_lower = nombre_archivo.lower()
+        prefijo_salida = os.path.splitext(nombre_archivo)[0]
         ruta_relativa = os.path.relpath(archivo_entrada, input_folder_raiz)
 
-        # A. Detección automática del grupo (7s u 8s)
-        if "8s" in ruta_relativa.lower() or "8s" in nombre_lower:
-            grupo_actual = "8s"
-        else:
-            grupo_actual = "7s"
+        grupo_actual = _detectar_grupo(ruta_relativa, nombre_archivo)
+        zona_codigo = _detectar_zona(nombre_archivo)
+        zona = f"ZONA_{zona_codigo}"
 
-        # B. Detección de zona (PB o C)
-        if "pb" in nombre_lower:
-            zona_codigo = "PB"
-        elif "c" in nombre_lower:
-            zona_codigo = "C"
-        else:
-            print(f"⚠️ Omitiendo '{nombre_archivo}': No se encontró ni 'PB' ni 'C' en el nombre.")
-            continue
-
-        ZONA = f"ZONA_{zona_codigo}"
-
-        # C. Evitar duplicar 7s/7s u 8s/8s limpiando la ruta relativa si empieza por el grupo
+        # Subcarpetas internas (excluyendo la carpeta inicial '7s' o '8s' si ya viene en la ruta)
         partes_ruta = ruta_relativa.split(os.sep)
-        if partes_ruta[0].lower() in ['7s', '8s']:
-            subpath_relativo = os.path.join(*partes_ruta[1:-1]) if len(partes_ruta) > 2 else ("" if len(partes_ruta) == 2 else partes_ruta[1])
+        if len(partes_ruta) > 1 and partes_ruta[0].lower() in ["7s", "8s"]:
+            subpath_relativo = os.path.join(*partes_ruta[1:-1]) if len(partes_ruta) > 2 else ""
         else:
             subpath_relativo = os.path.dirname(ruta_relativa)
 
-        # Construcción limpia de la carpeta de salida específica
-        output_folder_especifica = os.path.join(directorio_padre, grupo_actual, subpath_relativo)
-        output_folder_especifica = os.path.normpath(output_folder_especifica)
+        output_folder_especifica = os.path.normpath(
+            os.path.join(directorio_padre, grupo_actual, subpath_relativo)
+        )
         os.makedirs(output_folder_especifica, exist_ok=True)
 
         archivo_salida_final = os.path.normpath(
-            os.path.join(output_folder_especifica, f"{zona_codigo}_caso3_no_muestreado_2a_parte_MAPEADO_tipestr.csv")
+            os.path.join(output_folder_especifica, f"{prefijo_salida}_{zona_codigo}_MAPEADO_tipestr.csv")
         )
 
         print("\n" + "=" * 80)
-        print(f"🚀 PROCESANDO | Grupo: {grupo_actual} | Zona: {ZONA}")
+        print(f"🚀 PROCESANDO | Grupo: {grupo_actual} | Zona: {zona}")
         print(f"📄 Archivo: {nombre_archivo}")
         print(f"📂 Destino: {output_folder_especifica}")
         print("=" * 80)
 
-        # Leemos CSV de entrada
         df_origen = pd.read_csv(archivo_entrada, sep=';', encoding='utf-8-sig')
-
-        # Instanciación de la clase
         procesador = metodologia_2a_parte(df_origen)
 
-        # Flujo de trabajo secuencial
         procesador.aplicar_pasarela_df(PASARELA_TIPESTR)
-        procesador.eliminar_duplicados_binomios(ZONA, output_folder_especifica)
+        procesador.eliminar_duplicados_binomios(prefijo_salida, output_folder_especifica)
 
-        # Guardar Excel procesado completo
         print(f"\nGuardando CSV resultado final en: {archivo_salida_final}...")
         procesador.df.to_csv(archivo_salida_final, index=False, sep=';', encoding='utf-8-sig')
         print("¡Proceso de guardado finalizado con éxito!")
 
-        # Separar en CSVs (actualiza self.df al grupo 1:1)
-        procesador.separar_registros_por_binomios(ZONA, output_folder_especifica)
-
-        # Evaluar mejora de detalle sobre los casos 1:1
-        procesador.evaluar_mejora_detalle_1_1(ZONA, output_folder_especifica)
+        procesador.separar_registros_por_binomios(prefijo_salida, output_folder_especifica)
+        procesador.evaluar_mejora_detalle_1_1(prefijo_salida, output_folder_especifica)
 
         print(f"✅ ¡Flujo completo finalizado para {nombre_archivo}!")
 
-    print("\n🎉 ¡EL PROCESO BATCH RECURSIVO COMPLETO HA FINALIZADO!")
+    print("\n🎉 ¡PROCESO FINALIZADO!")
